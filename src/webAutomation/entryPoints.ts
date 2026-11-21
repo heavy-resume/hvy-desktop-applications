@@ -109,8 +109,9 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
   const documentQueues = new Map<string, DurableQueue>();
   const queueSlots = new Semaphore(() => (deps.scheduler?.collectionLimits?.() ?? DEFAULT_COLLECTION_WORKER_LIMITS).queueJobs);
   const heardSessions = new Map<string, SessionStatus>();
-  // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere. The user waits on them.
-  const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true, interactive: true });
+  // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere, paced as any run is, so what
+  // Test reads is what a fetch would. Nobody is asked mid-run: what needs a person is reported.
+  const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true, interactive: false });
   return {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
@@ -147,32 +148,18 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
       return openListedItemByClick({ scheduler, host: deps.host, clock: deps.clock }, profileId, listUrl, pattern, values);
     },
 
-    // UI: Set up this site, Test, "Find": the first `count` items on the list page, as a run lists them with this setup.
-    // Only that page is read, not its items' (even on a site read by clicking through its list), and nothing is kept.
-    async listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number): Promise<SetupTestRun & { items: ExtractItem[] }> {
+    // UI: Set up this site, Test: a fetch of the list page with the setup being made, as Fetch runs it, stopped after
+    // `count` items. Their pages are read even when the collection's runs leave them for later (readItemPages off, read
+    // then by Visit and read): how the setup reads an item's page is part of what Test checks. Its records are what it
+    // would write; nothing is kept.
+    async testSetup(profileId: string, definition: CollectionDefinition, listUrl: string, count: number): Promise<SetupTestRun & { records: CollectedRecord[] }> {
       const startPage = { id: 'setup-test', url: listUrl };
-      // A site whose rows have no link is listed only by clicking through it, as its runs do: each item is where its click
-      // went, with its row's key, and what its row showed of it (its key fields), as Read takes it.
-      const rowKeyed = definition.sites.find((site) => site.rowKey);
-      const sites = rowKeyed ? definition.sites : definition.sites.map(({ browse: _browse, ...site }) => site);
-      const trial: CollectionDefinition = { ...definition, sites, startPages: [startPage], maxItems: count, maxPages: 1, readItemPages: false };
-      const clicked: ExtractItem[] = [];
-      const run = await setupTests.start(trial, profileId, {
-        onRecord: (record) => {
-          if (rowKeyed?.rowKey && record.state === 'ok') {
-            clicked.push({ url: record.url, key: record.key, values: Object.fromEntries(rowKeyed.rowKey.map((field) => [field, record.values[field]])) });
-          }
-        },
-      }, [startPage]).done;
-      return { items: rowKeyed ? clicked : run.listedItems, run };
-    },
-
-    // UI: Set up this site, Test, "Read": those items' own pages, read as a run reads them with this setup: what each
-    // record would hold.
-    async readSetupExamples(profileId: string, definition: CollectionDefinition, items: ExtractItem[]): Promise<SetupTestRun & { records: CollectedRecord[] }> {
-      const records: CollectedRecord[] = [];
-      const run = await setupTests.extract(definition, profileId, items, { onRecord: (record) => records.push(record) }).done;
-      return { records, run };
+      // Each item as the output would keep it: written as its list showed it, then again once its page is read.
+      const records = new Map<string, CollectedRecord>();
+      const { readItemPages: _readItemPages, ...readsPages } = definition;
+      const trial: CollectionDefinition = { ...readsPages, startPages: [startPage], maxItems: count };
+      const run = await setupTests.start(trial, profileId, { onRecord: (record) => records.set(record.key ?? record.url, record) }, [startPage]).done;
+      return { records: [...records.values()], run };
     },
 
     // UI: pattern builder and Site patterns manager, "Test on another site".

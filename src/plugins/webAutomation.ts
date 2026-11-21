@@ -88,6 +88,14 @@ function actions(...buttons: HTMLButtonElement[]): HTMLElement {
   return row;
 }
 
+/** A status with its buttons beside it at the right: one row, as tall as its buttons. */
+function statusRow(text: string, buttons: HTMLElement): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'hvy-web-status-row';
+  row.append(status(text), buttons);
+  return row;
+}
+
 /**
  * A reader that rerenders from the automation's published state: on every
  * automation event, and after the reader's own actions. Rendering opens the
@@ -1014,25 +1022,34 @@ const webApiReader: HvyPluginFactory = (ctx) => {
     }
     if (!profile || lookup.automation.reviewWebApi(capability, profile.id).reason !== 'authorized') {
       // Whether the profile is signed in there is not checked before the file may use the site.
-      root.append(status(profile ? 'Not allowed in this file yet.' : 'No browser profile chosen yet.'), actions(openApproval(webApiLabel(`Allow ${capability.name}…`), true)));
+      root.append(statusRow(profile ? 'Not allowed in this file yet.' : 'No browser profile chosen yet.', actions(openApproval(webApiLabel(`Allow ${capability.name}…`), true))));
       finish();
       return;
     }
     // Without a sign-in there is no account to check: allowed is ready.
     if (!capability.session) {
-      root.append(status(`Ready · ${profile.name}`), actions(...changeProfile()));
+      root.append(statusRow(`Ready · ${profile.name}`, actions(...changeProfile())));
       finish();
       return;
     }
     const session = lookup.automation.getState().sessions.find((candidate) => candidate.origin === capabilityOrigin(capability) && candidate.profileId === profile.id);
     const key = `${capability.capabilityId}\0${profile.id}`;
+    // While it checks, the row of buttons the answer brings is already there (a button's room kept by one not shown), so
+    // the block doesn't grow, and the page below it shift, when the answer comes.
+    const checking = () => {
+      const room = button('Sign out');
+      room.classList.add('hvy-web-placeholder');
+      room.tabIndex = -1;
+      room.setAttribute('aria-hidden', 'true');
+      root.append(statusRow('Checking your account…', actions(room, ...changeProfile())));
+    };
     if (!session || session.status === 'unknown') {
       if (!probing.has(key)) {
         probing.add(key);
         lookup.automation.probeSession(capability).catch((error: unknown) => {
           problem = errorMessage(error);
         }).finally(sync);
-        root.append(status('Checking your account…'));
+        checking();
         return;
       }
       // The check finished without an answer (the page did not load, or the site answered with an error, which the
@@ -1045,24 +1062,24 @@ const webApiReader: HvyPluginFactory = (ctx) => {
           probing.delete(key);
           sync();
         });
-        root.append(status('Couldn’t check your account.'), paragraph(failure, 'hvy-web-error'), actions(again, ...changeProfile()));
+        root.append(statusRow('Couldn’t check your account.', actions(again, ...changeProfile())), paragraph(failure, 'hvy-web-error'));
         return;
       }
-      root.append(status('Checking your account…'));
+      checking();
       return;
     }
     probing.delete(key);
     if (session.status === 'signed-in') {
       const signOut = button('Sign out');
       signOut.addEventListener('click', () => void lookup.automation.signOut(capability).finally(sync));
-      root.append(status(`Signed in · ${profile.name}`), actions(signOut, ...changeProfile()));
+      root.append(statusRow(`Signed in · ${profile.name}`, actions(signOut, ...changeProfile())));
     } else {
       const signIn = button(`Sign in to ${capability.name}`, true);
       signIn.addEventListener('click', () => {
         problem = '';
         void lookup.automation.beginSignIn(capability).catch((error: unknown) => showProblem(errorMessage(error)));
       });
-      root.append(status(session.status === 'pending-login' ? 'Finish signing in in the browser window.' : 'Not signed in.'), actions(signIn, ...changeProfile()));
+      root.append(statusRow(session.status === 'pending-login' ? 'Finish signing in in the browser window.' : 'Not signed in.', actions(signIn, ...changeProfile())));
     }
     const message = problem || session.error;
     if (message) root.append(paragraph(message, 'hvy-web-error'));
@@ -2260,35 +2277,41 @@ const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 /** The days in that order, as Date numbers them (0 is Sunday). */
 const WEEKDAY_NUMBERS = [1, 2, 3, 4, 5, 6, 0];
 
+/** Whether two timings are the same: the same interval, or the same time on the same days. */
+function sameTiming(left: ScheduleTiming, right: ScheduleTiming): boolean {
+  if ('every' in left) return 'every' in right && left.every === right.every;
+  return 'at' in right && left.at === right.at && [...left.days].sort().join() === [...right.days].sort().join();
+}
+
 /**
  * When a job runs: "every [6] [hours]", or "at [2:00 AM]" on the days ticked (none ticked: every day). Told the timing
- * whenever it changes; an interval is never under the minimum.
+ * whenever it changes; an interval is never under the minimum. With a `fallback` (a page's checks, the collection's
+ * default), it shows the default's value until given its own, and a value the same as the default is the default:
+ * told as none of its own (undefined), so it follows the default as that changes.
  */
-export function timingInput(name: string, timing: ScheduleTiming | undefined, onChange: (timing: ScheduleTiming | undefined) => void, options: { fallback?: ScheduleTiming } = {}): HTMLElement {
+export function timingInput(name: string, own: ScheduleTiming | undefined, onChange: (timing: ScheduleTiming | undefined) => void, options: { fallback?: ScheduleTiming } = {}): HTMLElement {
+  const { fallback } = options;
+  const timing = (own ?? fallback) as ScheduleTiming;
+  const tell = (next: ScheduleTiming) => onChange(fallback && sameTiming(next, fallback) ? undefined : next);
   const row = document.createElement('span');
   row.className = 'hvy-web-schedule-frequency';
   const mode = document.createElement('select');
   mode.className = 'hvy-galaxy-select';
   mode.setAttribute('aria-label', `${name}: every or at`);
-  // With a fallback (a page's checks), "default" sets nothing of its own, and says what the default is.
-  const current = !timing ? 'default' : 'every' in timing ? 'every' : 'at';
-  for (const [value, text] of [...(options.fallback ? [['default', 'default']] : []), ['every', 'every'], ['at', 'at']]) {
+  for (const value of ['every', 'at']) {
     const option = document.createElement('option');
     option.value = value;
-    option.textContent = text;
-    option.selected = value === current;
+    option.textContent = value;
+    option.selected = value === ('every' in timing ? 'every' : 'at');
     mode.append(option);
   }
-  // Switched, it starts from a common choice of the other kind: every 6 hours, or daily at 2:00 AM.
-  mode.addEventListener('change', () => onChange(mode.value === 'default' ? undefined : mode.value === 'every' ? { every: 360 } : { at: '02:00', days: [] }));
+  // Switched, it starts from the default when that's of the kind chosen; else from a common choice: every 6 hours, or
+  // daily at 2:00 AM.
+  mode.addEventListener('change', () => {
+    const every = mode.value === 'every';
+    tell(fallback && every === ('every' in fallback) ? fallback : every ? { every: 360 } : { at: '02:00', days: [] });
+  });
   row.append(mode);
-  if (!timing) {
-    const fallback = document.createElement('span');
-    fallback.className = 'hvy-web-page-hint';
-    fallback.textContent = options.fallback ? `(${timingText(options.fallback)})` : '';
-    row.append(fallback);
-    return row;
-  }
   if ('every' in timing) {
     const [count, unit] = frequencyParts(timing.every);
     const value = textInput(`${name}-every`, String(count));
@@ -2308,7 +2331,7 @@ export function timingInput(name: string, timing: ScheduleTiming | undefined, on
     }
     const changed = () => {
       const next = Number(value.value);
-      if (Number.isFinite(next) && next > 0) onChange({ every: Math.max(SCHEDULE_MIN_MINUTES, next * FREQUENCY_UNITS[units.value as keyof typeof FREQUENCY_UNITS]) });
+      if (Number.isFinite(next) && next > 0) tell({ every: Math.max(SCHEDULE_MIN_MINUTES, next * FREQUENCY_UNITS[units.value as keyof typeof FREQUENCY_UNITS]) });
     };
     value.addEventListener('change', changed);
     units.addEventListener('change', changed);
@@ -2321,7 +2344,7 @@ export function timingInput(name: string, timing: ScheduleTiming | undefined, on
   at.setAttribute('aria-label', `${name}: time of day`);
   const days = new Set(timing.days);
   const changed = () => {
-    if (at.value) onChange({ at: at.value, days: [...days] });
+    if (at.value) tell({ at: at.value, days: [...days] });
   };
   at.addEventListener('change', changed);
   row.append(at);

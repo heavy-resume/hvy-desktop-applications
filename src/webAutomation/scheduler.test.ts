@@ -100,12 +100,12 @@ describe('worker scheduler', () => {
     await clock.runUntil(() => times.length === 4);
     await done;
     const gaps = times.slice(1).map((time, index) => time - times[index]);
-    expect(gaps.every((gap) => gap >= 1_500 && gap <= 4_500)).toBe(true);
+    expect(gaps.every((gap) => gap >= 500 && gap <= 1_500)).toBe(true);
     expect(new Set(gaps).size).toBeGreaterThan(1);
   });
 
   it('loads at once what the user just asked for, still counted as the site\'s last load', async () => {
-    const { clock, scheduler, log } = setup();
+    const { clock, scheduler } = setup();
     const times: number[] = [];
     const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'setup', interactive: true }, async (lease) => {
       for (let index = 0; index < 2; index += 1) {
@@ -121,12 +121,11 @@ describe('worker scheduler', () => {
     await clock.runUntil(() => times.length === 3);
     await done;
     expect(times[1] - times[0]).toBe(0);
-    expect(times[2] - times[1]).toBeGreaterThanOrEqual(1_500);
-    expect(log.filter((line) => line.startsWith('delay '))).toHaveLength(1);
+    expect(times[2] - times[1]).toBeGreaterThanOrEqual(500);
   });
 
-  it('scales the delays for development, and says how long each would be at full pacing', async () => {
-    const { clock, scheduler, log } = setup({ delayScale: 0.25 });
+  it('scales the delays for development', async () => {
+    const { clock, scheduler } = setup({ delayScale: 0.25 });
     const times: number[] = [];
     const done = scheduler.run({ profileId: 'p1', kind: 'collection', label: 'pace' }, async (lease) => {
       for (let index = 0; index < 4; index += 1) {
@@ -138,14 +137,7 @@ describe('worker scheduler', () => {
     await clock.runUntil(() => times.length === 4);
     await done;
     const gaps = times.slice(1).map((time, index) => time - times[index]);
-    expect(gaps.every((gap) => gap >= 375 && gap <= 1_125)).toBe(true);
-    const delays = log.filter((line) => line.startsWith('delay '));
-    expect(delays).toHaveLength(3);
-    for (const [index, line] of delays.entries()) {
-      const [, scaled, full] = line.match(/^delay ([\d.]+)s before same\.test \(([\d.]+)s at full pacing\)$/)!;
-      expect(Number(scaled)).toBeCloseTo(gaps[index] / 1000, 1);
-      expect(Number(full)).toBeCloseTo(Number(scaled) * 4, 0);
-    }
+    expect(gaps.every((gap) => gap >= 125 && gap <= 375)).toBe(true);
   });
   it('starts what the user just asked for at once, beyond the site\'s and Settings\' worker limits, within the profile\'s cap', async () => {
     const clock = new VirtualClock();

@@ -150,7 +150,7 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
     `Pick one of the ${escapeHtml(item)}s in the list. Galaxy opens it as a run does, then you pick what to read from it, such as its description and title. Pick another to add an example of a ${escapeHtml(item)} page laid out differently.`,
     `${posting ? `Reads: ${escapeHtml(fieldLabels(posting))} · ${examples} ${examples === 1 ? 'example' : 'examples'}` : ''}${setup.itemProblem ? `<span class="site-setup-test-problem" role="alert">${escapeHtml(setup.itemProblem)}</span>` : ''}${rowKey}`,
     `${posting ? button('Edit examples', 'item-examples') : ''}${button(posting ? `Pick another ${item}` : `Pick a ${item}`, 'item-page', Boolean(rows && !posting), !rows)}`);
-  // Two of the list's items found, then read, as a run would with this setup: what each would hold, field by field.
+  // The list fetched with this setup as Fetch would, for its first two items: what each would hold, field by field.
   const test = setup.test;
   // A long value is cut short, and opens in full: what a run would keep, to check it has all of it and nothing more.
   const preview = (value: string, result: number, field: number) => (value.length > 160
@@ -163,14 +163,12 @@ function renderSiteSetupDialog(state: AppState, setup: NonNullable<AppState['sit
           ${result.problem ? `<span class="site-setup-test-problem">${escapeHtml(result.problem)}</span>` : ''}
           <dl class="site-setup-test-fields">${result.fields.map((field, fieldIndex) => `<dt class="site-setup-test-label">${escapeHtml(field.label)}</dt><dd class="site-setup-test-value${field.value ? '' : ' site-setup-test-empty'}">${field.value ? preview(field.value, resultIndex, fieldIndex) : 'Empty'}</dd>`).join('')}</dl>
         </li>`).join('')}</ul>`
-    : test?.items.length
-      ? `<ul class="site-setup-test-results">${test.items.map((found) => `<li class="site-setup-test-result"><strong class="site-setup-test-title">${escapeHtml(found.title)}</strong></li>`).join('')}</ul>`
-      : '';
+    : '';
   const tested = Boolean(test?.results?.length && test.results.every((result) => !result.problem));
   const testStep = step(6, 'Test', tested, false,
-    `Find 2 ${escapeHtml(item)}s on the list, then read their pages as a run does, to check each field gets what you expect.`,
+    `Fetch 2 ${escapeHtml(item)}s from the list as Fetch does, to check each field gets what you expect. Nothing is kept.`,
     `${test?.pending ? `<span class="site-setup-test-pending" role="status">${escapeHtml(test.pending)}</span>` : ''}${test?.problem ? `<span class="site-setup-test-problem">${escapeHtml(test.problem)}</span>` : ''}${testResults}`,
-    `${button(`Find ${item}s`, 'test-find', false, !rows || !posting || Boolean(test?.pending))}${button('Read them', 'test-read', Boolean(test?.items.length && !test.results), !test?.items.length || Boolean(test?.pending))}`);
+    button('Test', 'test', false, !rows || !posting || Boolean(test?.pending)));
   const opened = test?.opened ? test.results?.[test.opened.result] : null;
   const openedField = opened && test?.opened ? opened.fields[test.opened.field] : null;
   const valueDialog = opened && openedField ? `

@@ -10,7 +10,7 @@ import { setDocumentAutomationOpener, openDocumentAutomation, WEB_AUTOMATION_PLU
 import { readWebAutomationBlocks } from './documentBlocks';
 import { withoutScheduledDocument, withScheduleBlock } from './scheduleSettings';
 import { scheduledDocuments, updateScheduledDocuments } from './scheduleStore';
-import type { CollectionDefinition, CollectionRunState, ExtractItem } from './collection';
+import type { CollectionDefinition, CollectionRunState } from './collection';
 import type { SitePatternDefinition } from './sitePatterns';
 import { createWebAutomationRuntime, type AutomationEvent, type WebAutomationRuntime } from './entryPoints';
 import { WebAutomationError } from './errors';
@@ -134,14 +134,9 @@ export function openListedItem(profileId: string, listUrl: string, link: string)
   return appRuntime().openListedItem(profileId, listUrl, link);
 }
 
-/** UI: Set up this site, Test, "Find": the list's first items, as a run lists them with the setup being made. */
-export function listSetupExamples(profileId: string, definition: CollectionDefinition, listUrl: string, count: number) {
-  return appRuntime().listSetupExamples(profileId, definition, listUrl, count);
-}
-
-/** UI: Set up this site, Test, "Read": those items' pages, read as a run reads them with the setup being made. */
-export function readSetupExamples(profileId: string, definition: CollectionDefinition, items: ExtractItem[]) {
-  return appRuntime().readSetupExamples(profileId, definition, items);
+/** UI: Set up this site, Test: a fetch of the list page with the setup being made, stopped after `count` items, keeping nothing. */
+export function testSiteSetup(profileId: string, definition: CollectionDefinition, listUrl: string, count: number) {
+  return appRuntime().testSetup(profileId, definition, listUrl, count);
 }
 
 /** UI: Set up this site, picking an example item whose opener has no link: clicked in a worker; null when it opened nothing. */

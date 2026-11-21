@@ -20,7 +20,7 @@ export interface SchedulerOptions {
   navigationDelayMs?: { min: number; max: number };
   /**
    * Multiplies the delays between page loads: 1 in production. Development can shorten them (0.25 waits a quarter as
-   * long) while the log still says how long each delay would be at full pacing.
+   * long).
    */
   navigationDelayScale?: number;
   /** What loads wait on: the network, and a site that couldn't be reached (network.ts). */
@@ -102,7 +102,7 @@ export class WorkerScheduler {
       collectionLimits: () => DEFAULT_COLLECTION_WORKER_LIMITS,
       maxCollectionWorkersPerProfile: COLLECTION_WORKER_LIMIT_BOUNDS.total,
       idleTimeoutMs: 120_000,
-      navigationDelayMs: { min: 1_500, max: 4_500 },
+      navigationDelayMs: { min: 500, max: 1_500 },
       navigationDelayScale: 1,
       network: new NetworkGate({ connectivity: ALWAYS_ONLINE, clock: options.clock, emit: options.emit }),
       ...options,
@@ -170,13 +170,8 @@ export class WorkerScheduler {
         if (last !== undefined && options?.delay !== false) {
           const { min, max } = options?.delay ?? this.options.navigationDelayMs;
           const scale = this.options.navigationDelayScale;
-          const full = randomBetween(this.options.random, min, max);
-          const wait = last + full * scale - this.options.clock.now();
-          if (wait > 0) {
-            const atFullPacing = scale === 1 ? '' : ` (${(full / 1000).toFixed(1)}s at full pacing)`;
-            this.options.emit('scheduler', `delay ${(wait / 1000).toFixed(1)}s before ${new URL(url).host}${atFullPacing}`, { workerId: record.id });
-            await this.options.clock.sleep(wait);
-          }
+          const wait = last + randomBetween(this.options.random, min, max) * scale - this.options.clock.now();
+          if (wait > 0) await this.options.clock.sleep(wait);
         }
         try {
           // Offline, or the site couldn't be reached: background work waits for it; what someone waits on is told now.

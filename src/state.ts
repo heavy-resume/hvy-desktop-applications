@@ -265,9 +265,8 @@ export interface AppState {
      * nothing was found or read. Cleared when the setup changes.
      */
     test: {
-      /** Finding or reading now, said in the step. */
+      /** Testing now, said in the step. */
       pending: string | null;
-      items: Array<{ url: string; title: string }>;
       /** Each field's value on one line (`value`), and in full as it was read (`full`), for a long one opened whole. */
       results: Array<{ url: string; title: string; fields: Array<{ label: string; value: string; full: string }>; problem: string | null }> | null;
       problem: string | null;

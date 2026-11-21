@@ -14,6 +14,21 @@
   gap: 0.5rem;
 }
 
+/* A status at the left and its buttons at the right, on one row (they wrap under it when narrow). */
+.hvy-web-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+/* No margin of its own: the document reader gives each paragraph in a block one (.hvy-document .reader-block p), which
+   these classes outrank, so the row is as tall as its buttons. */
+.hvy-web-status-row > .hvy-web-automation-text.hvy-web-automation-status {
+  margin: 0;
+}
+
 /* The queue's entries: long while a run of evaluations waits, so it scrolls. */
 .hvy-web-queue-entries {
   display: grid;
@@ -444,4 +459,9 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Keeps a button's room without showing it (the Web API block's row while it checks the account). */
+.hvy-web-placeholder {
+  visibility: hidden;
 }

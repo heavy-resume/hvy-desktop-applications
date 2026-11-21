@@ -168,6 +168,13 @@
     return fromEnd ? `…${compact.slice(-119)}` : `${compact.slice(0, 119)}…`;
   };
 
+  // Text in one line of at most 120 characters: whole, or its start and end with the middle left out.
+  const middlePreview = (text) => {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    if (compact.length <= 120) return compact;
+    return `${compact.slice(0, 60).trimEnd()} … ${compact.slice(-59).trimStart()}`;
+  };
+
   const visibleText = (element) => {
     const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
     if (text) return text;
@@ -1170,12 +1177,12 @@
         : `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(completeText || directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
       choice.style.cssText = 'display:block;width:100%;padding:8px;border:0;border-bottom:1px solid #dde3df;background:transparent;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer';
       if (!parentLike && !commandRecorder && !isMeaningful(element)) {
-        // A section holding its text in children: compare where it starts and ends, as the extension's picker shows.
+        // A section holding its text in children: its length, and its text, its middle left out when long, so where it
+        // starts and ends both show.
         const text = readableText(element);
         const lines = [
           [`${element.tagName.toLowerCase()}${structuralLabel === 'container' ? '' : structuralLabel} · ${text.length.toLocaleString()} characters`, 'font-weight:700'],
-          [`Starts  ${previewText(text)}`, 'color:#31413e'],
-          [`Ends  ${previewText(text, true)}`, 'color:#31413e'],
+          [middlePreview(text), 'color:#31413e'],
         ];
         choice.replaceChildren(...lines.map(([line, style]) => {
           const row = document.createElement('span');

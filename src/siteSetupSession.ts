@@ -5,8 +5,8 @@ import { state } from './state';
 import { patternsFromSetup, setupIntegrations } from './siteSetupPatterns';
 import type { SitePatternDefinition } from './webAutomation/sitePatterns';
 import { setSiteMatchingViewer, setSiteSetupOpener, type SiteMatchingRequest, type SiteSetupRequest, type SiteSetupSettings } from './webAutomation/siteSetupOpener';
-import { listSetupExamples, openListedItem, openListedItemByClick, openProfilePage, readSetupExamples, subscribeWebAutomation } from './webAutomation/app';
-import type { CollectionDefinition, CollectionRunState, ExtractItem } from './webAutomation/collection';
+import { openListedItem, openListedItemByClick, openProfilePage, subscribeWebAutomation, testSiteSetup } from './webAutomation/app';
+import type { CollectionDefinition, CollectionRunState } from './webAutomation/collection';
 import { withSiteSetups } from './webAutomation/siteSetups';
 import { matcherOf, recordValues, type InspectorRecord } from './webAutomation/nativeHost';
 
@@ -39,7 +39,6 @@ let active: {
   /** Opening an item changed only the part of the address after #: on this site that part names the page. */
   keepUrlFragment: boolean;
   /** Test: the items found on the list, to read. */
-  testItems: ExtractItem[];
 } | null = null;
 
 /** How many of the list's items Test reads. */
@@ -76,7 +75,7 @@ function startSiteSetup(request: SiteSetupRequest): void {
     : { ...createCustomPageIntegration(`${item} list`, request.url), siteSetup: true as const };
   const itemPage = existing.find((integration) => integration.id !== list.id) ?? null;
   for (const integration of [list, ...(itemPage ? [itemPage] : [])]) addToRegistry(integration);
-  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, opensWithoutLink: Boolean(request.site.rowKey), rowKey: request.site.rowKey ?? [], keepUrlFragment: request.site.keepUrlFragment === true, testItems: [] };
+  active = { request, integrationIds: new Set([list.id, ...(itemPage ? [itemPage.id] : [])]), listId: list.id, itemId: itemPage?.id ?? null, openedItem: null, opensWithoutLink: Boolean(request.site.rowKey), rowKey: request.site.rowKey ?? [], keepUrlFragment: request.site.keepUrlFragment === true };
   state.siteSetup = {
     collectionName: request.collection.name,
     documentName: state.document?.source.name ?? '',
@@ -348,69 +347,45 @@ export function openSetupTestValue(opened: { result: number; field: number } | n
 }
 
 /**
- * Test, Find: the first items on the list page, as a run with this setup lists them. Test, Read: their own pages, read
- * as a run reads them, each shown field by field, so an empty or wrong field shows before Done. Nothing is kept.
+ * Test: the list page fetched with this setup as Fetch would, its first items read as a run reads them (their pages,
+ * or clicked through), each shown field by field, so an empty or wrong field shows before Done. Nothing is kept.
  */
-function testSetup(session: NonNullable<typeof active>, step: 'test-find' | 'test-read'): void {
+function testSetup(session: NonNullable<typeof active>): void {
   const setup = state.siteSetup;
   if (!setup) return;
   const name = itemName(session.request);
-  const definition = sessionCollection(session);
-  const title = (item: ExtractItem) => shownValue(item.values?.title) || item.url;
-  // What happened is said in the step, by its buttons.
-  const failed = (error: unknown) => {
-    if (!state.siteSetup?.test || active !== session) return;
-    state.siteSetup.test.pending = null;
-    state.siteSetup.test.problem = error instanceof Error ? error.message : String(error);
-    rerender({ preserveMountedDocument: true });
-  };
-  if (step === 'test-find') {
-    session.testItems = [];
-    const finding = `Finding ${TEST_ITEMS} ${name}s on the list…`;
-    setup.test = { pending: finding, items: [], results: null, problem: null, opened: null };
-    rerender({ preserveMountedDocument: true });
-    // What the run is doing, as it goes (the events Background activity lists): a stall shows where it is.
-    const stopFollowing = subscribeWebAutomation((event) => {
-      if (!state.siteSetup?.test?.pending || active !== session) return;
-      state.siteSetup.test.pending = `${finding} ${event.message}`;
-      rerender({ preserveMountedDocument: true });
-    });
-    void listSetupExamples(state.selectedIntegrationProfileId, definition, setup.url, TEST_ITEMS).finally(stopFollowing).then(({ items, run }) => {
-      if (!state.siteSetup || active !== session) return;
-      session.testItems = items.slice(0, TEST_ITEMS);
-      state.siteSetup.test = {
-        pending: null,
-        items: session.testItems.map((item) => ({ url: item.url, title: title(item) })),
-        results: null,
-        // Fewer than asked for: what stopped it, if anything did.
-        problem: session.testItems.length < TEST_ITEMS ? runProblem(run) ?? (session.testItems.length ? null : `The list showed no ${name}s.`) : null,
-        opened: null,
-      };
-      rerender({ preserveMountedDocument: true });
-    }, failed);
-    return;
-  }
-  const items = session.testItems;
-  if (!items.length || !setup.test) return;
-  setup.test = { ...setup.test, pending: `Reading ${items.length === 1 ? `the ${name}’s page` : `the ${items.length} ${name}s’ pages`}…`, results: null, problem: null, opened: null };
+  const testing = `Testing on ${TEST_ITEMS} ${name}s…`;
+  setup.test = { pending: testing, results: null, problem: null, opened: null };
   rerender({ preserveMountedDocument: true });
-  void readSetupExamples(state.selectedIntegrationProfileId, definition, items).then(({ records, run }) => {
-    if (!state.siteSetup?.test || active !== session) return;
-    state.siteSetup.test.pending = null;
-    state.siteSetup.test.results = items.map((item) => {
-      const record = records.find((candidate) => candidate.url === item.url);
-      return {
-        url: item.url,
-        title: shownValue(record?.values.title) || title(item),
-        fields: session.request.collection.fields.map((field) => ({ label: field.label, value: shownValue(record?.values[field.id]), full: fullValue(record?.values[field.id]) })),
-        problem: record ? record.problem ?? null : runProblem(run) ?? 'Its page wasn’t read.',
-      };
-    });
+  // What the run is doing, as it goes (the events Background activity lists): a stall shows where it is.
+  const stopFollowing = subscribeWebAutomation((event) => {
+    if (!state.siteSetup?.test?.pending || active !== session) return;
+    state.siteSetup.test.pending = `${testing} ${event.message}`;
     rerender({ preserveMountedDocument: true });
-  }, failed);
+  });
+  void testSiteSetup(state.selectedIntegrationProfileId, sessionCollection(session), setup.url, TEST_ITEMS).finally(stopFollowing).then(({ records, run }) => {
+    if (!state.siteSetup?.test || active !== session) return;
+    state.siteSetup.test = {
+      pending: null,
+      results: records.map((record) => ({
+        url: record.url,
+        title: shownValue(record.values.title) || record.url,
+        fields: session.request.collection.fields.map((field) => ({ label: field.label, value: shownValue(record.values[field.id]), full: fullValue(record.values[field.id]) })),
+        problem: record.problem ?? null,
+      })),
+      // Fewer than asked for: what stopped it, if anything did.
+      problem: records.length < TEST_ITEMS ? runProblem(run) ?? (records.length ? null : `The list showed no ${name}s.`) : null,
+      opened: null,
+    };
+    rerender({ preserveMountedDocument: true });
+  }, (error: unknown) => {
+    if (!state.siteSetup?.test || active !== session) return;
+    state.siteSetup.test = { pending: null, results: null, problem: error instanceof Error ? error.message : String(error), opened: null };
+    rerender({ preserveMountedDocument: true });
+  });
 }
 
-export type SiteSetupStep = 'open-page' | 'rows' | 'pagination' | 'item-page' | 'item-examples' | 'test-find' | 'test-read' | 'done';
+export type SiteSetupStep = 'open-page' | 'rows' | 'pagination' | 'item-page' | 'item-examples' | 'test' | 'done';
 
 // UI: the site setup's steps in the Integrations manager, and Done.
 export function runSiteSetupStep(step: SiteSetupStep): void {
@@ -435,7 +410,7 @@ export function runSiteSetupStep(step: SiteSetupStep): void {
   // The item page's examples, in the record type builder: one picked wrong is removed, or its fields picked again.
   const itemPage = sessionIntegration(session.itemId);
   if (step === 'item-examples' && itemPage) buildRecordType(itemPage, `${item} page`, pagePrompts(itemName(session.request)));
-  if (step === 'test-find' || step === 'test-read') testSetup(session, step);
+  if (step === 'test') testSetup(session);
 }
 
 /** The record type builder is editing the setup's item page: its examples are other items from the list. */
@@ -454,7 +429,6 @@ function checkSiteSetup(): void {
   state.siteSetup.error = errors.length ? errors.join(' ') : null;
   // What was tested is not the setup any more.
   state.siteSetup.test = null;
-  active.testItems = [];
 }
 
 /** A page added during a setup is its item page ("Use a different item"), replacing the one it had. */

@@ -78,7 +78,6 @@ describe('mock integration: job search flow', () => {
     const cards = flow.items.list();
     expect(cards.map((card) => card.key).sort()).toEqual(['data-1', 'eng-1', 'eng-2', 'eng-3', 'pm-1'].map(acmeJob).sort());
     expect(flow.item(acmeJob('eng-1'))).toMatchObject({ state: 'ok', provenance: { patternId: 'ats-detail' }, fields: { company: 'Acme', title: 'Senior Engineer' } });
-    expect(flow.print()).toMatch(/delay \d+\.\ds before boards\.mock-ats\.test/);
     // Both list pages are read before any job's page, and the run never goes back to a list.
     const timeline = flow.print();
     expect(timeline.indexOf('start-1: page 2, 5 found, 0 already listed')).toBeLessThan(timeline.indexOf('record ok'));
@@ -109,6 +108,20 @@ describe('mock integration: job search flow', () => {
     const secondRun = flow!.print().split('run-2 started')[1];
     expect(secondRun).not.toContain('→ boards.mock-ats.test/acme/jobs/eng-1');
     expect(secondRun).toContain('skip known https://boards.mock-ats.test/acme/jobs/eng-1');
+  });
+
+  it('2b. an item whose page doesn\'t load is that item\'s problem, on its record; the run reads the rest, and Read on it alone says so the same way', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    flow!.host.failNavigation('/acme/jobs/eng-2', 'The page did not finish loading.');
+    const run = await flow!.collect(boards);
+    expect(run).toMatchObject({ status: 'done', collected: 4, problems: 1 });
+    expect(flow!.item(acmeJob('eng-2'))).toMatchObject({ problem: 'Its page didn’t load: The page did not finish loading.' });
+    expect(flow!.item(acmeJob('eng-3'))?.fields).toMatchObject({ company: 'Acme' });
+
+    const read = await flow!.extract(boards, acmeJob('eng-2'));
+    expect(read).toMatchObject({ status: 'done', error: null, problems: 1 });
+    expect(flow!.item(acmeJob('eng-2'))).toMatchObject({ problem: 'Its page didn’t load: The page did not finish loading.' });
   });
 
   it('3. pattern reuse: a second company on the same ATS needs no setup', async () => {
@@ -530,30 +543,28 @@ describe('mock integration: job search flow', () => {
     expect(loads.slice(-2).map((line) => line.split(' → ')[1])).toEqual([expect.stringContaining('/acme/jobs'), expect.stringContaining('/acme/jobs/eng-2')]);
   });
 
-  it('19f. setup Test: finds two of the list\'s items and reads their pages as a run would, keeping nothing; a page that needs a person is reported, not waited on', async () => {
+  it('19f. setup Test: fetches the list as a run would, stopped after two items read from their pages, keeping nothing; a page that needs a person is reported, not waited on', async () => {
     const boards = listingCollection([ACME], { patterns: [] });
     await signedInFlow(boards);
     const setup = flow!.addSiteSetups(boards, { id: 'acme-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'acme-ats' }, { ...atsDetailPattern, siteId: 'acme-ats' }] });
     const startedAt = flow!.clock.now();
-    const found = await flow!.listSetupExamples(setup, ACME, 2);
-    expect(found.items).toHaveLength(2);
+    const read = await flow!.testSetup(setup, ACME, 2);
     // Every row is new to a Test, so the list is read only as far as the two it takes.
     expect(flow!.print()).toMatch(/read the first 2 rows of /);
-    expect(found.items.every((item) => item.url.startsWith(`${ATS_ORIGIN}/acme/jobs/`) && typeof item.values?.title === 'string')).toBe(true);
-    const read = await flow!.readSetupExamples(setup, found.items);
-    expect(read.records.map((record) => record.url)).toEqual(found.items.map((item) => item.url));
-    // The user waits on them: no pause between their loads, as a run's.
-    expect(flow!.print()).not.toMatch(/delay [\d.]+s before/);
-    expect(flow!.clock.now() - startedAt).toBeLessThan(1_000);
+    expect(read.records.map((record) => record.url.startsWith(`${ATS_ORIGIN}/acme/jobs/`))).toEqual([true, true]);
+    // Paced as a run is (the list, then each job, a pause apart): what it reads is what a fetch would.
+    expect(flow!.clock.now() - startedAt).toBeGreaterThanOrEqual(1_000);
     expect(read.records.every((record) => record.state === 'ok' && record.values.company === 'Acme' && record.values.title)).toBe(true);
     // Nothing went into the collection's output.
     expect(flow!.items.list()).toEqual([]);
+    // A collection whose runs leave item pages for later (read by Visit and read) is still tested on them.
+    const listOnly = await flow!.testSetup({ ...setup, readItemPages: false }, ACME, 2);
+    expect(listOnly.records.map((record) => [record.state, record.values.company])).toEqual([['ok', 'Acme'], ['ok', 'Acme']]);
 
     // Wonka's job pages want a sign-in first: with no one to ask, each is reported as its setup didn't expect.
     const wonka = `${ATS_ORIGIN}/wonka/jobs`;
     const wonkaSetup = flow!.addSiteSetups(listingCollection([wonka], { patterns: [] }), { id: 'wonka-ats', name: 'Mock ATS', patterns: [{ ...atsListingPattern, siteId: 'wonka-ats' }, { ...atsDetailPattern, siteId: 'wonka-ats' }] });
-    const wonkaItems = (await flow!.listSetupExamples(wonkaSetup, wonka, 2)).items;
-    const unread = await flow!.readSetupExamples(wonkaSetup, wonkaItems);
+    const unread = await flow!.testSetup(wonkaSetup, wonka, 2);
     expect(unread.run).toMatchObject({ status: 'done', problems: 2 });
     expect(unread.records.map((record) => record.problem)).toEqual(['It didn’t look as its site setup expects.', 'It didn’t look as its site setup expects.']);
   });
@@ -579,15 +590,12 @@ describe('mock integration: job search flow', () => {
     expect(again).toMatchObject({ status: 'done', collected: 0, skipped: 5 });
     expect(flow!.print().split('run-2 started')[1]).not.toContain('open-item-by-click');
 
-    // Setup's Test finds its items by clicking through too: each where its click went, with its row's key, then reads
-    // their pages as a run would, keyed the same.
-    const { items } = await flow!.listSetupExamples(setup, ACME, 2);
-    expect(items).toEqual([
-      { url: `${ATS_ORIGIN}/acme/jobs/eng-1`, key: 'Senior Engineer', values: { title: 'Senior Engineer' } },
-      { url: `${ATS_ORIGIN}/acme/jobs/eng-2`, key: 'Platform Engineer', values: { title: 'Platform Engineer' } },
+    // Setup's Test clicks through too, as the run does: each item where its click went, keyed by its row.
+    const { records } = await flow!.testSetup(setup, ACME, 2);
+    expect(records.map((record) => [record.key, record.url, record.state, record.values.company])).toEqual([
+      ['Senior Engineer', `${ATS_ORIGIN}/acme/jobs/eng-1`, 'ok', 'Acme'],
+      ['Platform Engineer', `${ATS_ORIGIN}/acme/jobs/eng-2`, 'ok', 'Acme'],
     ]);
-    const { records } = await flow!.readSetupExamples(setup, items);
-    expect(records.map((record) => [record.key, record.state, record.values.company])).toEqual([['Senior Engineer', 'ok', 'Acme'], ['Platform Engineer', 'ok', 'Acme']]);
   });
 
   it('14d. getting to the list: a start page whose list shows only once searched for is searched as recorded, and its ready checks say it is there; one that still doesn\'t pass asks you, naming it', async () => {
@@ -639,8 +647,8 @@ describe('mock integration: job search flow', () => {
     const boards = listingCollection([stark], { patterns: [] });
     await signedInFlow(boards);
     const setup = flow!.addSiteSetups(boards, { id: 'stark-ats', name: 'stark-ats', browse: true, rowKey: ['title'], patterns: [rows, { ...atsDetailPattern, siteId: 'stark-ats' }] });
-    const { items } = await flow!.listSetupExamples(setup, stark, 2);
-    expect(items.map((item) => item.url)).toEqual([`${ATS_ORIGIN}/stark/jobs/eng-1`, `${ATS_ORIGIN}/stark/jobs/eng-2`]);
+    const { records } = await flow!.testSetup(setup, stark, 2);
+    expect(records.map((record) => record.url)).toEqual([`${ATS_ORIGIN}/stark/jobs/eng-1`, `${ATS_ORIGIN}/stark/jobs/eng-2`]);
     const log = flow!.print();
     // Typed on opening the list, then again after Back from each item.
     expect(log.split('search: typed “Software engineer”').length - 1).toBe(3);
@@ -678,9 +686,9 @@ describe('mock integration: job search flow', () => {
     const boards = listingCollection([dupli], { patterns: [] });
     await signedInFlow(boards);
     const setup = flow!.addSiteSetups(boards, { id: 'dupli-ats', name: 'dupli-ats', browse: true, rowKey: ['title'], patterns: [rows, { ...atsDetailPattern, siteId: 'dupli-ats' }] });
-    const { items, run } = await flow!.listSetupExamples(setup, dupli, 2);
+    const { records, run } = await flow!.testSetup(setup, dupli, 2);
     expect(run.problemPages).toEqual([]);
-    expect(items.map((item) => item.key)).toEqual(['Engineer', 'Staff Engineer']);
+    expect(records.map((record) => record.key)).toEqual(['Engineer', 'Staff Engineer']);
   });
 
   it('50. each page a run read without a problem is marked checked, in the collection block, and the document is unsaved; a page it couldn\'t read is not', async () => {

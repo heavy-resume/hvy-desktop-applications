@@ -524,17 +524,17 @@ export class CollectionService {
           if (siteId) run.itemSites.set(item.url, siteId);
           // An item its list showed came from a list, where a run may follow links to other sites.
           this.assertAllowed(run, item.url, listed !== null);
-          // Its turn come (after the pause between pages), the consumer is told as its page opens.
-          await this.paced(run, lease, item.url, () => {
-            run.waiting.delete(item.url);
-            if (key) {
-              run.reading.set(item.url, key);
-              run.consumer.reading?.(key);
-            }
-            return this.deps.host.navigate(lease.workerId, item.url);
-          });
           try {
-            await this.writeDetail(run, lease, item.url, await this.inspectAt(run, lease), listed ?? {});
+            // Its turn come (after the pause between pages), the consumer is told as its page opens.
+            const failed = await this.openItem(run, () => this.paced(run, lease, item.url, () => {
+              run.waiting.delete(item.url);
+              if (key) {
+                run.reading.set(item.url, key);
+                run.consumer.reading?.(key);
+              }
+              return this.deps.host.navigate(lease.workerId, item.url);
+            }));
+            await this.readOpened(run, lease, item.url, listed ?? {}, failed);
           } finally {
             run.reading.delete(item.url);
           }
@@ -754,8 +754,9 @@ export class CollectionService {
       this.checkStopped(run);
       progress.current = item.title;
       emit('collection', `${startPage.id}: reading ${item.title}`);
-      await this.paced(run, lease, item.link, () => host.navigate(lease.workerId, item.link));
-      await this.tracked(run, progress, async () => this.writeDetail(run, lease, item.link, await this.inspectAt(run, lease), item.values));
+      // Counted for its start page from when its page is there, as other pages' items are read meanwhile.
+      const failed = await this.openItem(run, () => this.paced(run, lease, item.link, () => host.navigate(lease.workerId, item.link)));
+      await this.tracked(run, progress, () => this.readOpened(run, lease, item.link, item.values, failed));
     }
   }
 
@@ -1021,6 +1022,26 @@ export class CollectionService {
     const record = detail?.match.records[0];
     if (!detail || !record) return { json: null, values: null, inspection };
     return { json: stableJson(record.values), values: this.mapFields(detail.pattern, record.values), inspection };
+  }
+
+  /**
+   * Opens an item's own page (`open`): why it didn't load, or null. A page that doesn't load is the item's problem (on
+   * its record, `readOpened`), and the run carries on with the rest: not the run's, or its start page's, failure.
+   */
+  private async openItem(run: ActiveRun, open: () => Promise<unknown>): Promise<string | null> {
+    try {
+      await open();
+      return null;
+    } catch (error) {
+      this.checkStopped(run);
+      return `Its page didn’t load: ${errorMessage(error)}`;
+    }
+  }
+
+  /** Reads the item's page `openItem` opened, or writes why it couldn't (`failed`). */
+  private async readOpened(run: ActiveRun, lease: WorkerLease, url: string, listingValues: Record<string, unknown>, failed: string | null): Promise<void> {
+    if (failed) this.writeProblem(run, url, listingValues, failed);
+    else await this.writeDetail(run, lease, url, await this.inspectAt(run, lease), listingValues);
   }
 
   /** Reads one item (or reports its problem), counting it for its start page. */

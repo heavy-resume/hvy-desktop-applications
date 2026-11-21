@@ -32,16 +32,11 @@ describe('Set up this site', () => {
     expect(before).toMatch(/data-action="open-site-setup-prepare" >Set up</);
     expect(before).not.toContain('site-setup-prepare-dialog');
     expect(before).toContain('<h3 class="site-setup-step-title">Test</h3>');
-    expect(before).toMatch(/data-step="test-find" >Find jobs</);
-    expect(before).toMatch(/data-step="test-read" disabled>Read them</);
+    expect(before).toMatch(/data-step="test" >Test</);
     // The item page's examples can be corrected, as the list's can.
     expect(before).toMatch(/data-step="item-examples" >Edit examples<\/button><button [^>]*data-step="item-page" >Pick another job</);
 
-    state.siteSetup.test = { items: [{ url: 'https://boards.example.test/jobs/1', title: 'Engineer' }, { url: 'https://boards.example.test/jobs/2', title: 'Designer' }], results: null, problem: null, pending: null, opened: null };
-    const found = renderIntegrationsDialog(state);
-    expect(found).toContain('<strong class="site-setup-test-title">Engineer</strong>');
-    expect(found).toMatch(/data-step="test-read" >Read them</);
-
+    state.siteSetup.test = { results: null, problem: null, pending: null, opened: null };
     state.siteSetup.test.results = [
       { url: 'https://boards.example.test/jobs/1', title: 'Engineer', fields: [{ label: 'Title', value: 'Engineer', full: 'Engineer' }, { label: 'Description', value: description, full: fullDescription }], problem: null },
       { url: 'https://boards.example.test/jobs/2', title: 'Designer', fields: [{ label: 'Title', value: 'Designer', full: 'Designer' }, { label: 'Description', value: '', full: '' }], problem: 'Description is required.' },

@@ -1051,10 +1051,11 @@ describe('integration structural inspector', () => {
     await clickPointerAt(page, '.job-description p:first-child');
     const choices = await page.locator('#hvy-galaxy-inspector-picker button').allTextContents();
     expect(choices).toContain('p — Build the operator console.');
-    // The section is offered with its length and where it starts and ends; the whole posting (the record) is not.
+    // The section is offered with its length and its text, short enough to show whole, once (where it starts and ends
+    // only when it's longer); the whole posting (the record) is not.
     const section = choices.find((choice) => choice.startsWith('div.job-description · '));
-    expect(section).toContain('Starts  Build the operator console.');
-    expect(section).toContain('Ends  Build the operator console.');
+    expect(section).toContain('Build the operator console.');
+    expect(section).not.toContain('Starts');
     expect(choices.some((choice) => choice.startsWith('article'))).toBe(false);
 
     const value = await page.evaluate(() => {
@@ -1065,6 +1066,28 @@ describe('integration structural inspector', () => {
       }).records[0].targets[0].value;
     });
     expect(value).toBe("Build the operator console.\n\nWhat you'll do\n\nWork with the team.\n\nShip every week.");
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('shows a long section as one line, its middle left out, so where it starts and ends both show', async () => {
+    await page.setContent(`
+      <article class="job-detail">
+        <h1 class="job-title">Senior Frontend Engineer</h1>
+        <div class="job-description">
+          <p>Build the operator console that dispatchers use all day to plan, assign, and follow every route.</p>
+          <ul><li>Work closely with dispatch, support, and the platform team.</li><li>Ship small changes every week, measured.</li></ul>
+        </div>
+      </article>`);
+    await page.addScriptTag({ content: inspectorSource });
+    const parentSnapshot = await page.evaluate(() => window.__hvyGalaxyInspector.snapshotElement(document.querySelector('.job-detail')!, null, 'parent'));
+    await page.evaluate((snapshot) => window.__hvyGalaxyInspector.start('target', { parentCssPath: '.job-detail', parentSnapshot: snapshot, multiSelect: true }), parentSnapshot);
+    await clickPointerAt(page, '.job-description p:first-child');
+    const choices = await page.locator('#hvy-galaxy-inspector-picker button').allTextContents();
+    const section = choices.find((choice) => choice.startsWith('div.job-description · '))!;
+    expect(section).toContain('Build the operator console that dispatchers use all day to');
+    expect(section).toContain(' … ');
+    expect(section).toContain('Ship small changes every week, measured.');
+    expect(section).not.toContain('Starts');
     expect(pageErrors).toEqual([]);
   });
 

@@ -89,6 +89,8 @@ interface MockWorker {
 export class MockHost implements BrowserHost {
   private heldRequests: Array<{ path: string; released: Promise<void> }> = [];
   private heldNavigations: Array<{ path: string; reached: () => void; released: Promise<void> }> = [];
+  /** Paths whose pages fail to load, with what the host says (`failNavigation`). */
+  private failingNavigations: Array<{ path: string; message: string }> = [];
   private readonly sites = new Map<string, MockSite>();
   private readonly jars = new Map<string, Map<string, Record<string, string>>>();
   private readonly workers = new Map<string, MockWorker>();
@@ -129,6 +131,11 @@ export class MockHost implements BrowserHost {
     if (held) {
       held.reached();
       await held.released;
+    }
+    const failing = this.failingNavigations.find((fail) => new URL(href).pathname.startsWith(fail.path));
+    if (failing) {
+      this.log(`${workerId} ✗ ${this.short(href)}: ${failing.message}`);
+      throw new Error(failing.message);
     }
     worker.history = [...worker.history.slice(0, worker.index + 1), href];
     worker.index = worker.history.length - 1;
@@ -305,6 +312,11 @@ export class MockHost implements BrowserHost {
     const bytes = await file.bytes();
     if (bytes.byteLength > options.maxBytes) throw new WebAutomationError('invalid_request', `The file is larger than ${options.maxBytes} bytes.`);
     return new Uint8Array(bytes);
+  }
+
+  /** Page loads of paths under `path` fail, as the host says (Tauri's "The page did not finish loading."). */
+  failNavigation(path: string, message: string): void {
+    this.failingNavigations.push({ path, message });
   }
 
   /** Holds page loads of paths under `path` until released, like a page that takes long to load: `reached` says one started. */
