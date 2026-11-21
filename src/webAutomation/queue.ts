@@ -1,5 +1,5 @@
 import { randomBetween, type Clock, type Random } from './clock';
-import { errorAction, errorCode, errorMessage, errorStatus } from './errors';
+import { errorAction, errorCode, errorMessage, errorStatus, WebAutomationError } from './errors';
 import type { AutomationEmit } from './events';
 
 export type QueueEntryStatus = 'queued' | 'running' | 'waiting-retry' | 'done' | 'failed' | 'cancelled';
@@ -23,6 +23,8 @@ export interface QueueEntry {
   nextAttemptAt: number | null;
   delivered: boolean;
   updatedAt: number;
+  /** Unreachable: the site's origin it waits on (the network back, or the site again), and isn't tried until then. */
+  waitingFor?: string | null;
 }
 
 export interface QueueConfig {
@@ -76,6 +78,33 @@ export const DEFAULT_QUEUE_CONFIG: QueueConfig = {
 
 export type QueueTarget = (input: unknown, context: { idempotencyKey: string }) => Promise<unknown>;
 
+/**
+ * How many queue jobs run at once across every queue in the app (App Settings, "Queue jobs at once"). A job holds its
+ * slot from its call until its result has been handled by the script that registered for it, so a slow handler holds
+ * back the next call rather than results piling up behind it. The limit is read as each slot is taken.
+ */
+export class Semaphore {
+  private taken = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: () => number) {}
+
+  async take(): Promise<() => void> {
+    if (this.taken < this.limit()) this.taken += 1;
+    // Its slot is counted as it is handed over (release).
+    else await new Promise<void>((resolve) => this.waiting.push(resolve));
+    return () => this.release();
+  }
+
+  private release(): void {
+    this.taken -= 1;
+    while (this.waiting.length && this.taken < this.limit()) {
+      this.taken += 1;
+      this.waiting.shift()!();
+    }
+  }
+}
+
 export class DurableQueue {
   private state: QueueState = { entries: [], paused: false, pauseReason: null, awaitingResume: false };
   /** Resolving false (if it returns a promise): the result never reached the script, so it is kept for the next handler. */
@@ -96,6 +125,10 @@ export class DurableQueue {
     emit: AutomationEmit;
     createId(): string;
     target: QueueTarget;
+    /** Shared by every queue: a job runs once it has a slot. */
+    slots: Semaphore;
+    /** When a site that couldn't be reached may be tried again (network.ts). */
+    network: { ready(url: string): Promise<void> };
   }) {
     this.target = deps.target;
   }
@@ -118,7 +151,7 @@ export class DurableQueue {
 
   /** Restores entries saved in the document. Interrupted work is re-queued but waits for resume(). */
   restore(state: QueueState): void {
-    const entries = state.entries.map((entry) => (entry.status === 'running' ? { ...entry, status: 'queued' as const } : { ...entry }));
+    const entries = state.entries.map((entry) => (entry.status === 'running' ? { ...entry, status: 'queued' as const, waitingFor: null } : { ...entry, waitingFor: null }));
     const pending = entries.some((entry) => entry.status === 'queued' || entry.status === 'waiting-retry');
     this.state = { entries, paused: state.paused, pauseReason: state.pauseReason, pauseMessage: state.pauseMessage ?? null, awaitingResume: pending };
   }
@@ -174,14 +207,14 @@ export class DurableQueue {
     this.state.pauseMessage = null;
     this.state.awaitingResume = false;
     this.deps.emit('queue', `${this.deps.id}: stopped, ${waiting.size} cancelled`);
-    for (const entry of this.state.entries.filter((candidate) => waiting.has(candidate.key))) this.deliver(entry);
+    for (const entry of this.state.entries.filter((candidate) => waiting.has(candidate.key))) void this.deliver(entry);
   }
 
   /** Cancels an entry waiting its turn, or dismisses a failed one. */
   cancel(key: string): void {
     const before = this.state.entries.find((entry) => entry.key === key)?.status;
     const cancelled = this.update(key, (entry) => (['queued', 'waiting-retry', 'failed'].includes(entry.status) ? { ...entry, status: 'cancelled', delivered: false } : entry));
-    if (cancelled && before !== 'cancelled' && cancelled.status === 'cancelled') this.deliver(cancelled);
+    if (cancelled && before !== 'cancelled' && cancelled.status === 'cancelled') void this.deliver(cancelled);
   }
 
   /**
@@ -193,7 +226,7 @@ export class DurableQueue {
     if (!entry || (entry.status !== 'queued' && entry.status !== 'waiting-retry')) return;
     this.state.entries = [{ ...entry, status: 'queued', nextAttemptAt: null }, ...this.state.entries.filter((candidate) => candidate !== entry)];
     this.deps.emit('queue', `${this.deps.id}: ${key} runs next`);
-    if (this.blocked() && !this.detached) void this.attempt(key);
+    if (this.blocked() && !this.detached) void this.run(key, true);
     else this.pump();
   }
 
@@ -225,7 +258,7 @@ export class DurableQueue {
   onResult(handler: QueueResultHandler): void {
     this.handler = handler;
     for (const entry of this.state.entries.filter((candidate) => !candidate.delivered && FINISHED.includes(candidate.status))) {
-      this.deliver(entry);
+      void this.deliver(entry);
     }
   }
 
@@ -269,7 +302,7 @@ export class DurableQueue {
 
   private nextEligible(): QueueEntry | null {
     const now = this.deps.clock.now();
-    return this.state.entries.find((entry) => (entry.status === 'queued' || entry.status === 'waiting-retry') && (entry.nextAttemptAt ?? 0) <= now) ?? null;
+    return this.state.entries.find((entry) => (entry.status === 'queued' || entry.status === 'waiting-retry') && !entry.waitingFor && (entry.nextAttemptAt ?? 0) <= now) ?? null;
   }
 
   /**
@@ -293,15 +326,29 @@ export class DurableQueue {
           if (wait > 0) await this.deps.clock.sleep(wait);
           if (this.blocked()) return;
         }
-        const current = this.state.entries.find((candidate) => candidate.key === entry.key);
-        if (current?.status !== 'queued' && current?.status !== 'waiting-retry') continue;
-        await this.attempt(entry.key);
+        await this.run(entry.key);
       }
     } finally {
       this.loops -= 1;
     }
   }
 
+  /**
+   * An entry's job: its call, once it has a slot, and its result handled. Gone meanwhile, or the queue paused (unless
+   * the user asked for this entry now: runNext), it isn't called.
+   */
+  private async run(key: string, asked = false): Promise<void> {
+    const release = await this.deps.slots.take();
+    try {
+      const current = this.state.entries.find((candidate) => candidate.key === key);
+      if ((!asked && this.blocked()) || (current?.status !== 'queued' && current?.status !== 'waiting-retry')) return;
+      await this.attempt(key);
+    } finally {
+      release();
+    }
+  }
+
+  /** Resolves once its result, if it has one now, has been handled. */
   private async attempt(key: string): Promise<void> {
     const entry = this.update(key, (current) => ({ ...current, status: 'running', attempts: current.attempts + 1, nextAttemptAt: null }));
     if (!entry) return;
@@ -311,7 +358,7 @@ export class DurableQueue {
     try {
       const result = await this.target(entry.input, { idempotencyKey: entry.idempotencyKey });
       const done = this.update(key, (current) => ({ ...current, status: 'done', result, lastError: null }));
-      if (done) this.deliver(done);
+      if (done) await this.deliver(done);
     } catch (error) {
       const code = errorCode(error);
       const status = errorStatus(error);
@@ -320,6 +367,17 @@ export class DurableQueue {
         // wait.
         this.update(key, (current) => ({ ...current, status: 'queued', attempts: current.attempts - 1, lastError: errorMessage(error) }));
         this.pause(code);
+        return;
+      }
+      if (code === 'unreachable') {
+        // Offline, or the site couldn't be reached: it waits for the site, an attempt not spent, and its slot free.
+        const origin = error instanceof WebAutomationError && error.origin ? error.origin : '';
+        this.update(key, (current) => ({ ...current, status: 'waiting-retry', attempts: current.attempts - 1, lastError: errorMessage(error), waitingFor: origin }));
+        this.deps.emit('queue', `${this.deps.id}: ${key} waits (${errorMessage(error)})`);
+        void this.deps.network.ready(origin).then(() => {
+          this.update(key, (current) => (current.waitingFor === origin ? { ...current, waitingFor: null } : current));
+          this.pump();
+        });
         return;
       }
       const action = errorAction(error);
@@ -340,11 +398,12 @@ export class DurableQueue {
         return;
       }
       const failed = this.update(key, (current) => ({ ...current, status: 'failed', lastError: errorMessage(error), lastStatus: status ?? null }));
-      if (failed) this.deliver(failed);
+      if (failed) await this.deliver(failed);
     }
   }
 
-  private deliver(entry: QueueEntry): void {
+  /** Resolves once the handler has handled it (its script has run). */
+  private async deliver(entry: QueueEntry): Promise<void> {
     if (!this.handler || !FINISHED.includes(entry.status)) return;
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
     this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
@@ -354,9 +413,9 @@ export class DurableQueue {
       : entry.status === 'failed'
         ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.', httpStatus: entry.lastStatus ?? null }
         : { ...base, status: 'cancelled' });
-    void handed?.then((ran) => {
-      if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
-    });
+    if (!handed) return;
+    const ran = await handed;
+    if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
   }
 
   private update(key: string, change: (entry: QueueEntry) => QueueEntry): QueueEntry | null {

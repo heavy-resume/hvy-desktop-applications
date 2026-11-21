@@ -7,7 +7,7 @@ import { subscribeWebAutomation } from '../webAutomation/app';
 import type { CollectionDefinition, CollectionField, CollectionProblem, CollectionRunState, CollectionSite, StartPageProgress, StartPage } from '../webAutomation/collection';
 import type { AuthorizationReview } from '../webAutomation/authorization';
 import { blockSettings, SETTINGS_IN_TEXT, settingsText, storedSettings } from '../webAutomation/blockSettings';
-import { cadenceText, duePages } from '../webAutomation/cadence';
+import { checkedText, duePages, scheduleText } from '../webAutomation/cadence';
 import { runScheduledJobNow, scheduledDocuments, scheduledJobWaitsIn, updateScheduledDocuments } from '../webAutomation/scheduleStore';
 import { runtimeDocumentById, type FileKey } from '../runtimeDocuments';
 import { jobTiming, scheduledFor, scheduleStatusText, timingText, withChangesApplied, withJobOn, withJobTiming, withScheduleChange, type ScheduledDocument } from '../webAutomation/scheduleSettings';
@@ -1654,7 +1654,8 @@ function pageProgressText(progress: StartPageProgress, items: string, needsYou: 
     case 'waiting': return 'Waiting for its turn…';
     case 'reading': return progress.pages ? `Reading the list: page ${progress.pages}, ${listed}${progress.current ? ` · ${progress.current}` : ''}` : 'Opening the list…';
     case 'collecting': return `Collecting ${progress.read + 1} of ${progress.toCollect}${progress.current ? `: ${progress.current}` : ''} (${listed})`;
-    case 'done': return `Last run: ${progress.collected} new, ${progress.listed ? `${progress.listed} not read yet, ` : ''}${progress.leftUnread ? `${progress.leftUnread} left unread, ` : ''}${progress.known} already in the list, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
+    // What a finished run found, after when it was checked.
+    case 'done': return `${progress.collected} new, ${progress.listed ? `${progress.listed} not read yet, ` : ''}${progress.leftUnread ? `${progress.leftUnread} left unread, ` : ''}${progress.known} already in the list, ${progress.problems} with problems (${progress.found} ${items} on ${progress.pages} ${progress.pages === 1 ? 'page' : 'pages'})`;
     case 'stopped': return `Last run stopped after ${progress.read} of ${progress.toCollect}.`;
     case 'failed': return `Last run failed after ${progress.read} of ${progress.toCollect}.`;
   }
@@ -1991,7 +1992,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
     selection.choose(new Set(on ? collection.startPages.map((page) => page.id) : []));
   });
   all.indeterminate = included.length > 0 && included.length < collection.startPages.length;
-  const heading = row(cell('hvy-web-pages-tick', all), cell('hvy-web-pages-head', 'Page'), cell('hvy-web-pages-head', 'Last run'), cell('hvy-web-pages-head', ''));
+  const heading = row(cell('hvy-web-pages-tick', all), cell('hvy-web-pages-head', 'Page'), cell('hvy-web-pages-head', 'Status'), cell('hvy-web-pages-head', ''));
   heading.classList.add('hvy-web-pages-heading');
   table.append(heading);
   for (const page of collection.startPages) {
@@ -2005,18 +2006,23 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
       else next.delete(page.id);
       selection.choose(next);
     });
+    // Its name, its address on hover; its address and setup are in Edit. Said here only what needs doing: not set up.
+    const title = paragraph(name, 'hvy-web-automation-entry hvy-web-page-name');
+    title.title = page.url;
     const about = [
-      paragraph(name, 'hvy-web-automation-entry hvy-web-page-name'),
-      ...(name !== shortAddress(page.url) ? [paragraph(shortAddress(page.url), 'hvy-web-automation-entry hvy-web-page-hint')] : []),
-      paragraph(reads ? `Reads with: ${reads}` : 'Not set up', 'hvy-web-page-hint'),
+      title,
+      ...(reads ? [] : [paragraph('Not set up', 'hvy-web-page-hint')]),
       ...(ownLimitsText(collection, page) ? [paragraph(ownLimitsText(collection, page)!, 'hvy-web-page-hint')] : []),
-      paragraph(page.disabled ? 'Disabled: fetching everything skips it' : cadenceText(collection, page, Date.now()), 'hvy-web-page-hint'),
     ];
-    const lastRun = latest?.problem
+    // Its status: a run under way, a problem from the last run, or when it was checked (saved with the page), with what
+    // a run since the app started found there; then when it's next due.
+    const now = Date.now();
+    const status = latest?.problem
       ? paragraph(`Couldn’t read this page. ${latest.problem}`, 'hvy-web-error')
-      : latest
+      : latest && latest.progress.status !== 'done'
         ? paragraph(pageProgressText(latest.progress, items(collection), latest.needsYou), latest.needsYou ? 'hvy-web-page-progress hvy-web-page-needs-you' : latest.running ? 'hvy-web-page-progress' : 'hvy-web-page-hint')
-        : paragraph('Not collected yet.', 'hvy-web-page-hint');
+        : paragraph(`${checkedText(page, now)}${latest ? ` · ${pageProgressText(latest.progress, items(collection), false)}` : ''}`, 'hvy-web-page-hint');
+    const schedule = paragraph(page.disabled ? 'Disabled: fetching everything skips it' : scheduleText(collection, page, now), 'hvy-web-page-hint');
     const edit = button('Edit');
     edit.setAttribute('aria-label', `Edit ${name}`);
     edit.addEventListener('click', () => openPageDialog(ctx, collection, page));
@@ -2036,7 +2042,7 @@ function pagesSection(ctx: HvyPluginContext, collection: CollectionDefinition, r
       fix.addEventListener('click', () => setUpSiteFor(ctx, collection, page.url, site, (setup) => saveCollection(ctx, withSiteSetups(currentCollection(ctx, collection), [setup]))));
       controls.prepend(fix);
     }
-    table.append(row(cell('hvy-web-pages-tick', include), cell('hvy-web-pages-page', ...about), cell('hvy-web-pages-run', lastRun), cell('hvy-web-pages-actions', controls)));
+    table.append(row(cell('hvy-web-pages-tick', include), cell('hvy-web-pages-page', ...about), cell('hvy-web-pages-run', status, schedule), cell('hvy-web-pages-actions', controls)));
   }
   section.append(table);
   return section;

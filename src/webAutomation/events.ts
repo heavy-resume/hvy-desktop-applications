@@ -1,6 +1,6 @@
 import type { Clock } from './clock';
 
-export type AutomationEventSource = 'host' | 'scheduler' | 'session' | 'api' | 'collection' | 'queue' | 'user' | 'document';
+export type AutomationEventSource = 'host' | 'network' | 'scheduler' | 'session' | 'api' | 'collection' | 'queue' | 'user' | 'document';
 
 export interface AutomationEvent {
   at: number;

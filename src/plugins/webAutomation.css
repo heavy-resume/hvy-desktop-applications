@@ -79,6 +79,13 @@
   border-top: 1px solid var(--hvy-border, #c9c3b8);
 }
 
+/* A cell's lines sit close, so a row is about as tall as its buttons: the document reader gives each paragraph in a block a
+   bottom margin and a roomy line height (.hvy-document .reader-block p), which this outranks with classes alone. */
+.hvy-web-pages-table .hvy-web-pages-cell > .hvy-web-automation-text {
+  margin: 0;
+  line-height: 1.35;
+}
+
 .hvy-web-pages-heading .hvy-web-pages-cell {
   position: sticky;
   top: 0;

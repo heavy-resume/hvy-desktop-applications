@@ -545,7 +545,7 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
     pluginAcceptances,
     webServiceApprovals,
     webCollectionLimits: data.has('webCollectionPerSite')
-      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')), apiCalls: Number(data.get('webApiCalls')) })
+      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')), apiCalls: Number(data.get('webApiCalls')), queueJobs: Number(data.get('webQueueJobs')) })
       : parsedSettings.webCollectionLimits,
     scheduledJobsAtOnce: data.has('scheduledJobsAtOnce') ? normalizeScheduledJobsAtOnce(Number(data.get('scheduledJobsAtOnce'))) : parsedSettings.scheduledJobsAtOnce,
   };

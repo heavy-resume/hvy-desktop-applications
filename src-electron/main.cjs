@@ -3742,7 +3742,7 @@ function defaultAppSettings() {
     integrationWebMcpApprovals: {},
     webServiceApprovals: {},
     // Validated by the renderer's normalizeCollectionWorkerLimits.
-    webCollectionLimits: { perSite: 2, total: 4 },
+    webCollectionLimits: { perSite: 2, total: 4, apiCalls: 4, queueJobs: 2 },
     // Validated by the renderer's normalizeScheduledDocuments.
     scheduledDocuments: {},
     // Validated by the renderer's normalizeScheduledJobsAtOnce.

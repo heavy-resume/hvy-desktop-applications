@@ -1,6 +1,7 @@
 import { randomBetween, type Clock, type Random } from './clock';
 import type { AutomationEmit } from './events';
 import type { BrowserHost } from './host';
+import { ALWAYS_ONLINE, NetworkGate } from './network';
 import { COLLECTION_WORKER_LIMIT_BOUNDS, DEFAULT_COLLECTION_WORKER_LIMITS, type CollectionWorkerLimits } from './settings';
 
 export interface SchedulerOptions {
@@ -22,6 +23,8 @@ export interface SchedulerOptions {
    * long) while the log still says how long each delay would be at full pacing.
    */
   navigationDelayScale?: number;
+  /** What loads wait on: the network, and a site that couldn't be reached (network.ts). */
+  network?: NetworkGate;
 }
 
 export interface JobRequest {
@@ -101,6 +104,7 @@ export class WorkerScheduler {
       idleTimeoutMs: 120_000,
       navigationDelayMs: { min: 1_500, max: 4_500 },
       navigationDelayScale: 1,
+      network: new NetworkGate({ connectivity: ALWAYS_ONLINE, clock: options.clock, emit: options.emit }),
       ...options,
     };
   }
@@ -175,7 +179,9 @@ export class WorkerScheduler {
           }
         }
         try {
-          return await load();
+          // Offline, or the site couldn't be reached: background work waits for it; what someone waits on is told now.
+          const interactive = record.jobs.some((job) => job.interactive);
+          return await this.options.network.reach(url, load, { wait: !interactive, signal: record.jobs[0]?.signal });
         } finally {
           this.lastLoad.set(key, this.options.clock.now());
           finished();

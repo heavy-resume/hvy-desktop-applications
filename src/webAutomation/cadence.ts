@@ -37,16 +37,19 @@ export function duePages(collection: CollectionDefinition, pages: StartPage[], n
     .map(({ page }) => page);
 }
 
+/** When a run last read a page: "Checked 3 days ago", or "Not checked yet". */
+export function checkedText(page: StartPage, now: number): string {
+  return page.checkedAt ? `Checked ${ago(now - Date.parse(page.checkedAt))}` : 'Not checked yet';
+}
+
 /**
- * When a page was checked, when it is due, and how often (set in Scheduling, its own or the defaults): "Checked 3 days
- * ago · due in 4 days · every 7 days".
+ * When a page is due, and how often (set in Scheduling, its own or the defaults): "Due in 4 days · every 7 days", "Due
+ * now · every day", "Due 3 days ago · every 7 days".
  */
-export function cadenceText(collection: CollectionDefinition, page: StartPage, now: number): string {
+export function scheduleText(collection: CollectionDefinition, page: StartPage, now: number): string {
   const often = timingText(checkTiming(collection, page));
-  const due = dueAt(collection, page);
-  if (due === null) return `Not checked yet · due · ${often}`;
-  const checked = `Checked ${ago(now - Date.parse(page.checkedAt!))}`;
-  return `${checked} · ${due <= now ? `due${now - due >= DAY_MS ? ` ${days(now - due)} ago` : ''}` : `due in ${days(due - now)}`} · ${often}`;
+  const due = dueAt(collection, page) ?? now;
+  return `${due > now ? `Due in ${days(due - now)}` : now - due >= DAY_MS ? `Due ${days(now - due)} ago` : 'Due now'} · ${often}`;
 }
 
 function days(ms: number): string {

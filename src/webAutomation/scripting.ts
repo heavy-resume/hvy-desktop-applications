@@ -100,7 +100,10 @@ export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Rec
       // A queue passes its entry's stable idempotency key, so a retried call never creates a second result.
       const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
       // A document its document-text inputs send is read from the copy the document's session keeps, if it keeps one.
-      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey, session: ctx.session.state }));
+      // Offline, or the site couldn't be reached: the call waits and is made again, unless `wait` is false (an
+      // unreachable error at once; a queue's calls, so the queue waits instead).
+      const wait = args.wait !== false;
+      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey, session: ctx.session.state, wait }));
     },
     /**
      * Forgets the copy the document's session keeps of a served document (`endpointId` serving it, and `documentId`): the next call that

@@ -23,11 +23,12 @@ import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/doc
 import { createEventChannel, type AutomationEvent } from './events';
 import type { BrowserHost } from './host';
 import { resolveProfile, type BrowserProfile } from './profiles';
-import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueConfig, type QueueEntry, type QueueResultHandler, type QueueState, type QueueTarget } from './queue';
+import { DEFAULT_QUEUE_CONFIG, DurableQueue, Semaphore, type QueueConfig, type QueueEntry, type QueueResultHandler, type QueueState, type QueueTarget } from './queue';
+import { ALWAYS_ONLINE, NetworkGate, type Connectivity } from './network';
 import { WorkerScheduler, type SchedulerOptions, type SchedulerState } from './scheduler';
 import { SessionService, type SessionState, type SessionStatus } from './session';
 import { loadPublishedService, type PublishedService } from './serviceManifests';
-import type { AutomationSettingsStore } from './settings';
+import { DEFAULT_COLLECTION_WORKER_LIMITS, type AutomationSettingsStore } from './settings';
 import { WEB_API_PLUGIN_ID, WEB_COLLECTION_PLUGIN_ID } from './configs';
 import { ApiTransport, capabilityOrigin, WebApiService, type CallOptions, type WebApiCapability, type WebApiResult } from './webApi';
 import { ScriptCalls } from './scriptCalls';
@@ -58,7 +59,9 @@ export interface WebAutomationRuntimeDeps {
   profiles(): BrowserProfile[];
   /** New idempotency keys for queue entries (crypto.randomUUID in the app). */
   createId(): string;
-  scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit'>;
+  scheduler?: Omit<SchedulerOptions, 'host' | 'clock' | 'random' | 'emit' | 'network'>;
+  /** Whether the machine has a network (the browser's navigator.onLine); always, without it. */
+  connectivity?: Connectivity;
 }
 
 /** Document-level dependencies. */
@@ -87,8 +90,10 @@ export interface WebAutomationDocumentDeps {
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
   const events = createEventChannel(deps.clock);
   const emit = events.emit;
-  const scheduler = new WorkerScheduler({ ...deps.scheduler, host: deps.host, clock: deps.clock, random: deps.random, emit });
-  const transport = new ApiTransport({ scheduler, host: deps.host, clock: deps.clock, emit });
+  // Offline, nothing goes to a site that isn't local; a site that couldn't be reached is tried again after a while.
+  const network = new NetworkGate({ connectivity: deps.connectivity ?? ALWAYS_ONLINE, clock: deps.clock, emit });
+  const scheduler = new WorkerScheduler({ ...deps.scheduler, host: deps.host, clock: deps.clock, random: deps.random, emit, network });
+  const transport = new ApiTransport({ scheduler, host: deps.host, clock: deps.clock, emit, network });
   const sessions = new SessionService({ host: deps.host, transport, settings: deps.settings, clock: deps.clock, emit });
   // The text a served document contributes to an input is the reference Markdown export, as the Heavy Resume
   // extension sends.
@@ -102,6 +107,7 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     exportDocumentText: documentText,
   });
   const documentQueues = new Map<string, DurableQueue>();
+  const queueSlots = new Semaphore(() => (deps.scheduler?.collectionLimits?.() ?? DEFAULT_COLLECTION_WORKER_LIMITS).queueJobs);
   const heardSessions = new Map<string, SessionStatus>();
   // Site setup's Test: runs of a setup not saved yet, for no document, written nowhere. The user waits on them.
   const setupTests = new CollectionService({ scheduler, host: deps.host, clock: deps.clock, emit, unattended: true, interactive: true });
@@ -109,6 +115,9 @@ export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
     deps,
     /** Queues by document path and queue ID. They outlive an open document so work already sent can finish. */
     queues: documentQueues,
+    /** Queue jobs at once, across them all. */
+    queueSlots,
+    network,
     /**
      * The account status each document's session handler last heard, by document path, capability, and key. It outlives
      * a mount: coming back to a document's tab mounts it again (a fresh copy, if it was saved), and its scripts register
@@ -484,7 +493,10 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     // since for the saved entries stays (a call that finished while the file was closed), and entries never saved go
     // with the unsaved changes.
     openQueue(queueId: string, target: PluginCallTarget, config: QueueConfig = DEFAULT_QUEUE_CONFIG, saved: QueueState | null = null): void {
-      const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey });
+      // A Web API call that can't reach its site comes back unreachable at once: the queue waits for the site, without
+      // holding a queue-job slot.
+      const unreachableNow = target.pluginId === WEB_API_PLUGIN_ID ? { wait: false } : {};
+      const call: QueueTarget = async (input, { idempotencyKey }) => deps.callPlugin(target.pluginId, target.method, { ...target.args, input, idempotencyKey, ...unreachableNow });
       const registryKey = `${deps.documentPath()}\u0000${queueId}`;
       const existing = runtime.queues.get(registryKey);
       if (existing) {
@@ -502,6 +514,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
         emit,
         createId: deps.createId,
         target: call,
+        slots: runtime.queueSlots,
+        network: runtime.network,
       });
       if (saved) item.restore(saved);
       runtime.queues.set(registryKey, item);

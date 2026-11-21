@@ -89,6 +89,14 @@ function appRuntime(): WebAutomationRuntime {
     // Development only: VITE_WEB_AUTOMATION_DELAY_SCALE shortens (or lengthens) the delays between page loads.
     // How many pages are collected at once (App Settings): read as each page's turn comes, so a change applies next.
     scheduler: { navigationDelayScale: developmentDelayScale(), collectionLimits: () => state.appSettings.webCollectionLimits },
+    // Offline, loads and calls to sites that aren't local wait for the network to come back.
+    connectivity: {
+      online: () => navigator.onLine,
+      whenOnline: (listener) => {
+        window.addEventListener('online', listener);
+        return () => window.removeEventListener('online', listener);
+      },
+    },
   });
   recentEvents.length = 0;
   runtime.events.subscribe((event) => {

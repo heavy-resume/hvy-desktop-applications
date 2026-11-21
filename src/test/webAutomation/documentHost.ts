@@ -38,7 +38,9 @@ export function installPageStandIns(): void {
   global.window = globalThis;
   global.self = globalThis;
   global.addEventListener = () => undefined;
-  global.document = { dispatchEvent: () => true, createElement: element };
+  // Brython's realm is an iframe the loader finds or adds; here it is the Node global, where Brython was loaded.
+  const realm = { isConnected: true, contentWindow: globalThis };
+  global.document = { dispatchEvent: () => true, createElement: element, querySelector: () => realm };
 }
 
 /**

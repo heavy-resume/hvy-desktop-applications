@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { VirtualClock } from '../test/webAutomation/virtualClock';
 import { WebAutomationError } from './errors';
-import { DEFAULT_QUEUE_CONFIG, DurableQueue, type QueueResult } from './queue';
+import { DEFAULT_QUEUE_CONFIG, DurableQueue, Semaphore, type QueueResult } from './queue';
 
 function createQueue(clock: VirtualClock, concurrency: number) {
   let ids = 0;
   const calls: unknown[] = [];
   const queue = new DurableQueue({
+    slots: new Semaphore(() => 8),
+    network: { ready: async () => undefined },
     id: 'test',
     config: { ...DEFAULT_QUEUE_CONFIG, concurrency, minIntervalMs: 1_000, jitterMs: 0 },
     clock,
@@ -29,6 +31,50 @@ async function runUntilIdle(clock: VirtualClock, queue: DurableQueue): Promise<v
 }
 
 describe('DurableQueue', () => {
+  it('runs as many jobs at once as the shared slots allow, across queues, each holding its slot until its result is handled', async () => {
+    const clock = new VirtualClock();
+    let limit = 1;
+    const slots = new Semaphore(() => limit);
+    const started: string[] = [];
+    const handled: Array<() => void> = [];
+    const queues = ['a', 'b', 'c'].map((id) => {
+      const queue = new DurableQueue({
+        slots,
+        network: { ready: async () => undefined },
+        id,
+        config: { ...DEFAULT_QUEUE_CONFIG, concurrency: 1, minIntervalMs: 0, jitterMs: 0 },
+        clock,
+        random: () => 0,
+        emit: () => undefined,
+        createId: () => `${id}-id`,
+        target: async (input) => {
+          started.push(String(input));
+          return input;
+        },
+      });
+      // The script takes its time with each result.
+      queue.onResult(() => new Promise<boolean>((resolve) => handled.push(() => resolve(true))));
+      queue.enqueue(id, id);
+      return queue;
+    });
+    await clock.step();
+    expect(started).toEqual(['a']);
+
+    // Its result handled, the next queue's job starts.
+    handled.shift()!();
+    await clock.step();
+    expect(started).toEqual(['a', 'b']);
+
+    // A changed limit applies to the next slot taken.
+    limit = 2;
+    handled.shift()!();
+    await clock.step();
+    expect(started).toEqual(['a', 'b', 'c']);
+    handled.shift()!();
+    await clock.step();
+    expect(queues.every((queue) => queue.isIdle())).toBe(true);
+  });
+
   it('runs every entry enqueued together, whatever its concurrency', async () => {
     for (const concurrency of [1, 2, 3]) {
       const clock = new VirtualClock();
@@ -44,6 +90,8 @@ describe('DurableQueue', () => {
     const clock = new VirtualClock();
     let ids = 0;
     const queue = new DurableQueue({
+      slots: new Semaphore(() => 8),
+      network: { ready: async () => undefined },
       id: 'details',
       config: { ...DEFAULT_QUEUE_CONFIG, concurrency: 1, minIntervalMs: 200, jitterMs: 0 },
       clock,
@@ -70,6 +118,8 @@ describe('DurableQueue', () => {
     const sent: unknown[] = [];
     const results: QueueResult[] = [];
     const queue = new DurableQueue({
+      slots: new Semaphore(() => 8),
+      network: { ready: async () => undefined },
       id: 'evaluate',
       config: { ...DEFAULT_QUEUE_CONFIG, concurrency: 1, minIntervalMs: 1_000, jitterMs: 0 },
       clock,
@@ -112,6 +162,8 @@ describe('DurableQueue', () => {
       const clock = new VirtualClock();
       let ids = 0;
       const queue = new DurableQueue({
+        slots: new Semaphore(() => 8),
+        network: { ready: async () => undefined },
         id: 'evaluate',
         // 429 is one the queue retries itself; 418 is not.
         config: { ...DEFAULT_QUEUE_CONFIG, concurrency: 1, jitterMs: 0 },

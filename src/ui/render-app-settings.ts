@@ -557,6 +557,8 @@ function renderWebCollectionLimits(settings: AppState['appSettings']): string {
           ${limit('webCollectionTotal', 'Pages read at once in all', settings.webCollectionLimits.total, COLLECTION_WORKER_LIMIT_BOUNDS.total)}
           <p class="dialog-note">Calls to a service's API, such as job fit reports, go out side by side from one hidden window per browser profile.</p>
           ${limit('webApiCalls', 'Max API calls at once', settings.webCollectionLimits.apiCalls, COLLECTION_WORKER_LIMIT_BOUNDS.apiCalls)}
+          <p class="dialog-note">Across every document's queues. A job lasts until its result is handled.</p>
+          ${limit('webQueueJobs', 'Queue jobs at once', settings.webCollectionLimits.queueJobs, COLLECTION_WORKER_LIMIT_BOUNDS.queueJobs)}
         </fieldset>`;
 }
 

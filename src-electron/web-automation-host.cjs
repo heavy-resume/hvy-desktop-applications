@@ -12,6 +12,17 @@
 const { BrowserWindow, WebContentsView, session } = require('electron');
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
+
+// Chromium's network errors that mean the page never reached the site: the connection ones (-100 to -199: refused,
+// reset, the name not found, no internet), the network changing, and a timeout. Marked for the renderer
+// (src/webAutomation/errors.ts, UNREACHABLE_MARK), which waits for the site and loads the page again.
+function isUnreachableLoad(code) {
+  return (code <= -100 && code > -200) || code === -21 || code === -7;
+}
+
+function loadError(description, code) {
+  return new Error(`${isUnreachableLoad(code) ? '[unreachable] ' : ''}The page failed to load: ${description}`);
+}
 const FETCH_FILE_PARTITION = 'hvy-galaxy-web-automation-files';
 
 function createWebAutomationHost(deps) {
@@ -98,7 +109,7 @@ function createWebAutomationHost(deps) {
       const timer = setTimeout(() => finish(new Error('The page did not finish loading.')), NAVIGATION_TIMEOUT_MS);
       const loaded = () => finish(null);
       const failed = (_event, code, description, _url, isMainFrame) => {
-        if (isMainFrame && code !== -3) finish(new Error(`The page failed to load: ${description}`));
+        if (isMainFrame && code !== -3) finish(loadError(description, code));
       };
       function finish(error) {
         clearTimeout(timer);
@@ -119,7 +130,13 @@ function createWebAutomationHost(deps) {
 
   async function navigate(workerId, url) {
     const { window } = worker(workerId);
-    await window.webContents.loadURL(url);
+    try {
+      await window.webContents.loadURL(url);
+    } catch (error) {
+      // loadURL rejects with Chromium's error: its name (code) and number (errno).
+      if (isUnreachableLoad(error?.errno)) throw loadError(error.code || error.message, error.errno);
+      throw error;
+    }
     return { url: window.webContents.getURL() };
   }
 

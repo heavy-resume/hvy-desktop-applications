@@ -7,6 +7,7 @@ import type { VisualDocument } from '../../../heavy-file-format/src/types';
 import { WebAutomationError, type ResponseAction } from './errors';
 import type { AutomationEmit } from './events';
 import type { BrowserHost, HostResponse } from './host';
+import type { NetworkGate } from './network';
 import type { WorkerScheduler } from './scheduler';
 import type { SessionService } from './session';
 import type { AutomationSettingsStore } from './settings';
@@ -82,6 +83,11 @@ export interface CallOptions {
   idempotencyKey?: string;
   /** Someone is waiting on the answer (an account check): it goes ahead of queued background calls. */
   interactive?: boolean;
+  /**
+   * Offline, or the site couldn't be reached: wait for it and try again (the default, but not for someone waiting on
+   * the answer), or fail as unreachable now (false, as a queue's calls do: the queue waits, and keeps its slot free).
+   */
+  wait?: boolean;
   /** The calling document's session (its scripts' `session.state`), which keeps the documents its document-text inputs send. */
   session?: ScriptingSessionState;
 }
@@ -166,7 +172,7 @@ export class ApiTransport {
   /** Each API worker's way to its page: calls sharing the worker wait for the one load there, rather than each loading it. */
   private readonly arrivals = new Map<string, { origin: string; arrived: Promise<unknown>; url?: string }>();
 
-  constructor(private readonly deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock; emit: AutomationEmit }) {}
+  constructor(private readonly deps: { scheduler: WorkerScheduler; host: BrowserHost; clock: Clock; emit: AutomationEmit; network: NetworkGate }) {}
 
   call(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, input: Record<string, unknown>, options: CallOptions = {}): Promise<HostResponse> {
     // An endpoint on one of the block's call origins is called from that origin's root page, as the rest from the API page.
@@ -175,6 +181,11 @@ export class ApiTransport {
     const origin = new URL(pageUrl).origin;
     // The call itself, so the same call made twice is told from two calls of one endpoint.
     const identity = `${capability.name}: ${endpoint.name}\0${request.method} ${request.url}\0${typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? null)}`;
+    // Waits at the gate before it takes a worker; a load or request that never reached the site is made again.
+    return this.deps.network.reach(pageUrl, () => this.send(capability, profileId, endpoint, pageUrl, request, origin, identity, options), { wait: options.wait ?? !options.interactive });
+  }
+
+  private send(capability: WebApiCapability, profileId: string, endpoint: ApiEndpointDefinition, pageUrl: string, request: ReturnType<typeof resolveEndpointRequest>, origin: string, identity: string, options: CallOptions): Promise<HostResponse> {
     return this.deps.scheduler.run({ profileId, kind: 'api', origin, label: `${capability.name}: ${endpoint.name}`, identity, interactive: options.interactive }, async (lease) => {
       // Loaded again when the worker is elsewhere: on another site's page, or sent off this one (to sign in).
       let arrival = this.arrivals.get(lease.workerId);

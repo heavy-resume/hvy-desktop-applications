@@ -137,14 +137,6 @@ export function renderBackgroundActivityDialog(state: AppState): string {
         <h2 id="backgroundActivityTitle">Background activity</h2>
         <div class="background-activity-work">
           <section class="background-activity-section">
-            <h3 class="background-activity-heading">Now</h3>
-            ${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}
-          </section>
-          <section class="background-activity-section">
-            <h3 class="background-activity-heading">Collections</h3>
-            ${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}
-          </section>
-          <section class="background-activity-section">
             <div class="background-activity-section-header">
               <h3 class="background-activity-heading">Queues</h3>
               <span class="background-activity-actions">
@@ -153,6 +145,14 @@ export function renderBackgroundActivityDialog(state: AppState): string {
               </span>
             </div>
             ${withQueues.length ? withQueues.map(({ path, queues }) => `${documentHeading(state, path)}<ul class="background-activity-list">${queues.map((queue) => queueRow(path, queue)).join('')}</ul>`).join('') : '<p class="dialog-note">No queued work.</p>'}
+          </section>
+          <section class="background-activity-section">
+            <h3 class="background-activity-heading">Now</h3>
+            ${workers || waiting ? `<ul class="background-activity-list">${workers}${waiting}</ul>` : '<p class="dialog-note">No browser workers yet.</p>'}
+          </section>
+          <section class="background-activity-section">
+            <h3 class="background-activity-heading">Collections</h3>
+            ${withRuns.length ? withRuns.map(({ path, runs }) => `${documentHeading(state, path)}<ul class="background-activity-list">${runs.map((run) => runRow(path, run)).join('')}</ul>`).join('') : '<p class="dialog-note">No collection running.</p>'}
           </section>
         </div>
         <section class="background-activity-section background-activity-recent">

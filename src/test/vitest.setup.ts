@@ -46,3 +46,6 @@ beforeEach(() => {
   session.clear();
   installBrowserStorage();
 });
+
+// Node's navigator has no onLine: the machine is online, as a page's navigator says (web automation's network gate).
+Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true });

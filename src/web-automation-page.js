@@ -42,7 +42,13 @@
 
     /** Same-origin, credentialed request made from inside the page. */
     async request(hostRequest) {
-      const response = await fetch(hostRequest.url, { method: hostRequest.method, headers: hostRequest.headers, body: hostRequest.body, credentials: 'include', redirect: 'manual' });
+      let response;
+      try {
+        response = await fetch(hostRequest.url, { method: hostRequest.method, headers: hostRequest.headers, body: hostRequest.body, credentials: 'include', redirect: 'manual' });
+      } catch (error) {
+        // fetch fails only when it got no response: no connection to the site (errors.ts, UNREACHABLE_MARK).
+        throw new Error(`[unreachable] ${String(error?.message || error)}`);
+      }
       const contentType = response.headers.get('content-type') || '';
       const text = await response.text();
       let body = text;

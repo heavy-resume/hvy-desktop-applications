@@ -14,7 +14,7 @@ function setup(options: { perProfile?: number; global?: number; delayScale?: num
     random: seededRandom(1),
     emit: (_source, message) => log.push(message),
     maxCollectionWorkersPerProfile: options.perProfile ?? 2,
-    collectionLimits: () => ({ perSite: 2, total: options.global ?? 4, apiCalls: 4 }),
+    collectionLimits: () => ({ perSite: 2, total: options.global ?? 4, apiCalls: 4, queueJobs: 2 }),
     idleTimeoutMs: 60_000,
     ...(options.delayScale !== undefined ? { navigationDelayScale: options.delayScale } : {}),
   });
@@ -149,7 +149,7 @@ describe('worker scheduler', () => {
   });
   it('starts what the user just asked for at once, beyond the site\'s and Settings\' worker limits, within the profile\'s cap', async () => {
     const clock = new VirtualClock();
-    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, maxCollectionWorkersPerProfile: 3, collectionLimits: () => ({ perSite: 1, total: 1, apiCalls: 4 }) });
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, maxCollectionWorkersPerProfile: 3, collectionLimits: () => ({ perSite: 1, total: 1, apiCalls: 4, queueJobs: 2 }) });
     const job = (label: string, interactive = false) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label, interactive }, holdFor(clock, 10_000));
     const jobs = [job('run'), job('next run'), job('retry', true), job('open', true), job('third', true)];
     await clock.step(0);
@@ -161,7 +161,7 @@ describe('worker scheduler', () => {
 
   it('runs a profile\'s API calls side by side in its one API worker while they go to one site, up to its limit; a call to another site waits for them', async () => {
     const clock = new VirtualClock();
-    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => ({ perSite: 2, total: 4, apiCalls: 2 }) });
+    const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => ({ perSite: 2, total: 4, apiCalls: 2, queueJobs: 2 }) });
     const call = (label: string, origin = 'https://api.test') => scheduler.run({ profileId: 'p1', kind: 'api', origin, label }, holdFor(clock, 1_000));
     const calls = [call('report 1'), call('report 2'), call('report 3'), call('elsewhere', 'https://other.test')];
     await clock.step(0);
@@ -180,14 +180,14 @@ describe('worker scheduler', () => {
 
   it('reads the collection limits as each job is placed, so a changed setting applies to the next job', async () => {
     const clock = new VirtualClock();
-    let limits = { perSite: 1, total: 4, apiCalls: 4 };
+    let limits = { perSite: 1, total: 4, apiCalls: 4, queueJobs: 2 };
     const scheduler = new WorkerScheduler({ host: new MockHost([]), clock, random: seededRandom(1), emit: () => undefined, collectionLimits: () => limits });
     const job = (label: string) => scheduler.run({ profileId: 'p1', kind: 'collection', origin: 'https://same.test', label }, holdFor(clock, 10_000));
     const first = [job('a'), job('b')];
     await clock.step(0);
     expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['b']);
     // App Settings: two pages on one site. The next placement lets the waiting job in, in order.
-    limits = { perSite: 2, total: 4, apiCalls: 4 };
+    limits = { perSite: 2, total: 4, apiCalls: 4, queueJobs: 2 };
     const third = job('c');
     await clock.step(0);
     expect(scheduler.getState().waitingJobs.map((waiting) => waiting.label)).toEqual(['c']);

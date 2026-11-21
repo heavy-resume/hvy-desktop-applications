@@ -87,11 +87,13 @@ export interface CollectionWorkerLimits {
   perSite: number;
   total: number;
   apiCalls: number;
+  /** Queue jobs at once, across every queue: each a call and its result's handling (queue.ts, Semaphore). */
+  queueJobs: number;
 }
 
-export const DEFAULT_COLLECTION_WORKER_LIMITS: CollectionWorkerLimits = { perSite: 2, total: 4, apiCalls: 4 };
+export const DEFAULT_COLLECTION_WORKER_LIMITS: CollectionWorkerLimits = { perSite: 2, total: 4, apiCalls: 4, queueJobs: 2 };
 /** Each collection worker is a webview, and API calls share one page: these bound what the settings accept. */
-export const COLLECTION_WORKER_LIMIT_BOUNDS: CollectionWorkerLimits = { perSite: 4, total: 8, apiCalls: 8 };
+export const COLLECTION_WORKER_LIMIT_BOUNDS: CollectionWorkerLimits = { perSite: 4, total: 8, apiCalls: 8, queueJobs: 8 };
 
 /** The stored limits, each a whole number within its bounds, or its default. */
 export function normalizeCollectionWorkerLimits(value: unknown): CollectionWorkerLimits {
@@ -102,5 +104,5 @@ export function normalizeCollectionWorkerLimits(value: unknown): CollectionWorke
       ? Math.min(COLLECTION_WORKER_LIMIT_BOUNDS[key], Math.max(1, stored))
       : DEFAULT_COLLECTION_WORKER_LIMITS[key];
   };
-  return { perSite: limit('perSite'), total: limit('total'), apiCalls: limit('apiCalls') };
+  return { perSite: limit('perSite'), total: limit('total'), apiCalls: limit('apiCalls'), queueJobs: limit('queueJobs') };
 }

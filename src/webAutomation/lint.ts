@@ -20,6 +20,7 @@ registerHvyCliPluginCommands({
   componentHints: [
     'This plugin is a signed-in web API: a service page, its session, and its endpoints, as indented JSON in plugin.txt (its pluginConfig in plugin.json stays empty).',
     'Scripts call an endpoint with doc.plugins.call("galaxy.web-api", "call", {"capabilityId": ..., "endpointId": ..., "input": {...}, "on_complete": handler, "on_error": handler}).',
+    'Offline, or when the site can\'t be reached, a call waits and is made again once it can be; "on_error" hears only errors the site gave. With "wait": False it fails at once instead, with the code "unreachable".',
     'The user allows the plugin per file, and approves the service at sign-in; changing the endpoints asks for approval again.',
   ],
   addCommands: [{ command: 'hvy insert INDEX plugin SECTION_PATH [ID|--id ID] galaxy.web-api', description: 'Create a web API block. Edit plugin.txt (indented JSON) for the service page, session, and endpoints.' }],
