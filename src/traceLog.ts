@@ -5,14 +5,14 @@ import { invoke } from '@tauri-apps/api/core';
  * (append_trace_line) before it runs, as it happens, so the last lines say what the page was doing. The steps are the
  * debug log's timed work (a start line before it, an end line after) and its events, and heavy-file-format's console
  * output (its script runs, document hooks, history). Off unless `localStorage.hvyTrace` is "1" (set it in the page's
- * console and reload); the Tauri app only.
+ * console and reload); the Tauri app's development build only (a release build never writes it).
  */
 let enabled = false;
 
 export function startTrace(): void {
   try {
     // The Tauri app's page (as backend's isTauriRuntime tells it; not imported, as backend logs through the debug log).
-    enabled = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window && localStorage.getItem('hvyTrace') === '1';
+    enabled = import.meta.env.DEV && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window && localStorage.getItem('hvyTrace') === '1';
   } catch {
     enabled = false;
   }

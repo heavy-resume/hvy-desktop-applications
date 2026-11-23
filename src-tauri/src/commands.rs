@@ -2630,9 +2630,13 @@ fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<Docume
 }
 
 /// Diagnostics: one line of the page's trace (src/traceLog.ts), appended to trace.log in the app's log folder as it
-/// comes, so what the page did last is on disk even when it hangs. The file starts over past 50 MB.
+/// comes, so what the page did last is on disk even when it hangs. The file starts over past 50 MB. Development builds
+/// only: a release build writes nothing, as the trace holds pieces of documents' text.
 #[tauri::command]
 fn append_trace_line(app: AppHandle, line: String) -> AppResult<()> {
+    if !cfg!(debug_assertions) {
+        return Ok(());
+    }
     let directory = app.path().app_log_dir().map_err(|error| AppError::Message(error.to_string()))?;
     fs::create_dir_all(&directory)?;
     let path = directory.join("trace.log");

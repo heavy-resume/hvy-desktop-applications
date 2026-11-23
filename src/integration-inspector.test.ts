@@ -457,7 +457,7 @@ describe('integration structural inspector', () => {
     expect(pageErrors).toEqual([]);
   });
 
-  it('boxes matching ready-check landmarks green and changed values red', async () => {
+  it('boxes matching ready-check landmarks green and changed values red', { timeout: 15_000 }, async () => {
     await page.close();
     page = await browser.newPage();
     await page.setContent(mockInbox);
@@ -465,13 +465,14 @@ describe('integration structural inspector', () => {
       window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__readyCheckResult = value; } };
     });
     await page.addScriptTag({ content: inspectorSource });
-    const states = await page.evaluate(() => {
+    const states = await page.evaluate(async () => {
       const passing = document.createElement('h1');
       passing.textContent = 'Signed in';
       const changed = document.createElement('time');
       changed.textContent = 'August';
       document.body.prepend(passing, changed);
-      void window.__hvyGalaxyInspector.validateReadyChecksAndPublish({
+      // A check that fails is given the page's few seconds to settle, as a run gives it, before the boxes are drawn.
+      await window.__hvyGalaxyInspector.validateReadyChecksAndPublish({
         urlMode: 'strict-url',
         urlValue: location.href,
         elements: [
@@ -711,6 +712,13 @@ describe('integration structural inspector', () => {
     expect(await page.locator('[data-inspector-status-text]').textContent()).toBe('1 field selected');
     expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
     expect(await page.getByRole('button', { name: 'Done' }).isEnabled()).toBe(true);
+
+    // With the menu of what to pick open, Escape closes the menu, and only that: the field picked stays.
+    await clickPointerAt(page, '[data-record="first"] .subject');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(1);
+    await page.keyboard.press('Escape');
+    expect(await page.locator('#hvy-galaxy-inspector-picker').count()).toBe(0);
+    expect(await page.locator('[data-collection-selection="true"]').count()).toBe(1);
 
     // Escape takes back the last field, as Undo last does; with none left it does nothing, and picking goes on.
     await page.keyboard.press('Escape');
@@ -2546,6 +2554,42 @@ describe('integration structural inspector', () => {
     await choose();
     await clickPointerAt(page, '[data-row="2"] p');
     expect((await page.evaluate(() => window.__commandRecordingResult as Choice)).opener).toMatchObject({ href: null, snapshot: { selected: { shape: { tag: 'p' } } } });
+    expect(pageErrors).toEqual([]);
+  });
+
+  it('boxes a list a site draws after the picker starts, once the page settles, and lets one of its records be picked', async () => {
+    const rows = (titles: string[]) => titles.map((title, index) => `<li class="row" data-row="${index}"><a href="https://jobs.test/company/acme" class="company">Acme</a> <a href="https://jobs.test/jobs/${index}" class="open">${title}</a><p>Remote</p></li>`).join('');
+    await page.setContent(`<main style="margin-top:140px"><ul class="rows">${rows(['Data Analyst', 'Product Manager'])}</ul></main>`);
+    await page.evaluate(() => {
+      delete (window as { __hvyGalaxyInspector?: InspectorApi }).__hvyGalaxyInspector;
+      window.__hvyGalaxyHost = { ...window.__hvyGalaxyHost, publish: (value) => { window.__commandRecordingResult = value; } };
+    });
+    await page.addScriptTag({ content: inspectorSource });
+    const rowsPattern = await page.evaluate(() => {
+      const row = document.querySelector('[data-row="0"]')!;
+      return {
+        minimumConfidence: 0.8,
+        parents: [window.__hvyGalaxyInspector.snapshotElement(row, null, 'parent')],
+        targets: [
+          { label: 'company', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.company')!, row, 'target') },
+          { label: 'title', snapshot: window.__hvyGalaxyInspector.snapshotElement(row.querySelector('.open')!, row, 'target') },
+        ],
+      };
+    });
+    // The list not drawn yet when the picker starts, as a site whose results come after its page loads.
+    await page.evaluate(() => { document.querySelector('.rows')!.innerHTML = ''; });
+    await page.evaluate((pattern) => window.__hvyGalaxyInspector.start('parent', {
+      existingPattern: pattern,
+      prompt: 'Click what opens a job',
+      recordChoice: { refuse: 'Click what opens one of the jobs boxed in green.' },
+    }), rowsPattern);
+    expect(await page.locator('[data-existing-match-kind="parent"]').count()).toBe(0);
+
+    await page.evaluate((html) => { document.querySelector('.rows')!.innerHTML = html; }, rows(['Data Analyst', 'Product Manager', 'Designer']));
+    await page.waitForFunction(() => document.querySelectorAll('[data-existing-match-kind="parent"]').length === 3);
+    await clickPointerAt(page, '[data-row="2"] .open');
+    const chosen = await page.evaluate(() => window.__commandRecordingResult as { kind: string; opener: { href: string | null } });
+    expect(chosen).toMatchObject({ kind: 'integration-record-choice', opener: { href: 'https://jobs.test/jobs/2' } });
     expect(pageErrors).toEqual([]);
   });
 

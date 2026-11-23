@@ -1482,6 +1482,15 @@
     showPicker(event);
   };
   const keydown = (event) => {
+    // Escape closes what is on top first: the menu of what to pick (Choose data inside the selected parent), and only
+    // that; picking carries on, the next Escape doing what it does.
+    const menu = document.getElementById('hvy-galaxy-inspector-picker');
+    if (active && event.key === 'Escape' && menu) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      menu.remove();
+      return;
+    }
     // Escape in range mode leaves it, taking back a range's start if one was picked; the fields already picked are kept.
     if (active && event.key === 'Escape' && !rangeEditing && exitRangeMode()) {
       event.preventDefault();
@@ -2882,7 +2891,13 @@
       commandRecordElements = options.commandRecorder?.scope === 'record'
         ? new Set(inspectionPattern ? findPatternMatches(inspectionPattern).map((match) => match.element) : [])
         : null;
-      if (inspectionPattern) {
+      // The pattern's matches on the page, boxed: drawn again as the page changes (below), as a site may draw its list
+      // after it loads. Only these boxes are replaced; the picker's own stay.
+      const drawExistingMatches = () => {
+        document.getElementById('hvy-galaxy-existing-matches')?.remove();
+        for (let index = trackedBoxes.length - 1; index >= 0; index -= 1) {
+          if (trackedBoxes[index].existing) trackedBoxes.splice(index, 1);
+        }
         const existingLayer = document.createElement('div');
         existingLayer.id = 'hvy-galaxy-existing-matches';
         existingLayer.style.cssText = 'position:fixed;inset:0;z-index:2147483645;pointer-events:none';
@@ -2926,7 +2941,7 @@
           caption.style.cssText = `display:inline-block;padding:2px 5px;background:${parentColor};color:#fff`;
           box.append(caption);
           existingLayer.append(box);
-          trackedBoxes.push({ element: match.element, box });
+          trackedBoxes.push({ element: match.element, box, existing: true });
 
           // Picking one of the records (by what opens it) shows only the records: their fields' boxes would read as what
           // is being picked.
@@ -2948,12 +2963,13 @@
               targetCaption.style.cssText = `display:inline-block;padding:1px 4px;background:${targetColor};color:#fff`;
               targetBox.append(targetCaption);
               existingLayer.append(targetBox);
-              trackedBoxes.push({ element, box: targetBox, ...(target.textRange ? { rect: () => target.textRange.getBoundingClientRect() } : {}) });
+              trackedBoxes.push({ element, box: targetBox, existing: true, ...(target.textRange ? { rect: () => target.textRange.getBoundingClientRect() } : {}) });
             });
           });
         });
         document.documentElement.append(existingLayer);
-      }
+      };
+      if (inspectionPattern) drawExistingMatches();
       const scope = inspectionKind === 'target' ? resolvedScope() : null;
       const scopeBox = scope ? document.createElement('div') : null;
       if (scopeBox) {
@@ -3031,6 +3047,30 @@
       recordChoice = options.recordChoice && inspectionPattern
         ? { matches: findPatternMatches(inspectionPattern), refuse: () => { statusText.textContent = options.recordChoice.refuse || 'Pick one of the records boxed in green.'; } }
         : null;
+      // A page that draws its list after it loads (or loads more as it goes): once it has been still for half a second,
+      // its matches are found and boxed again, and a record picked by a click is one of those. The inspector's own
+      // boxes and bars changing are not the page changing.
+      if (inspectionPattern) {
+        const ownChange = (change) => (change.target instanceof Element && isInspectorElement(change.target))
+          || [...change.addedNodes, ...change.removedNodes].every((node) => node instanceof Element && isInspectorElement(node));
+        let settled = 0;
+        const pageChanged = new MutationObserver((changes) => {
+          if (changes.every(ownChange)) return;
+          clearTimeout(settled);
+          settled = setTimeout(() => {
+            drawExistingMatches();
+            if (recordChoice) recordChoice.matches = findPatternMatches(inspectionPattern);
+            updateSelectionBoxes();
+          }, 500);
+        });
+        pageChanged.observe(document.documentElement, { childList: true, subtree: true });
+        const previousCleanup = selectionOverlayCleanup;
+        selectionOverlayCleanup = () => {
+          pageChanged.disconnect();
+          clearTimeout(settled);
+          previousCleanup?.();
+        };
+      }
       const rangeEdit = inspectionKind === 'target' && options.rangeEdit?.snapshot?.range ? options.rangeEdit : null;
       if (rangeEdit) {
         const { snapshot: edited, boundary } = rangeEdit;
@@ -3743,18 +3783,17 @@
     async validateReadyChecksAndPublish(checks = {}, context = {}) {
       window.__hvyGalaxyInspector.stop();
       // A site setup's list: its steps to get there taken first (`context.prepareCommand`), then the checks, given the
-      // page a few seconds to settle, as a run does.
+      // page a few seconds to settle, as a run does: with steps or without, as a site may draw its list after it loads.
+      const ran = context.prepareCommand
+        ? await executeCommand({ command: context.prepareCommand, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } })
+        : null;
+      const deadline = Date.now() + 5000;
       let readiness = pageReadiness(checks);
-      if (context.prepareCommand) {
-        const ran = await executeCommand({ command: context.prepareCommand, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } });
-        const deadline = Date.now() + 5000;
+      while (!readiness.ready && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
         readiness = pageReadiness(checks);
-        while (!readiness.ready && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-          readiness = pageReadiness(checks);
-        }
-        if (ran?.status !== 'executed') readiness = { ...readiness, ready: false, steps: ran };
       }
+      if (ran && ran.status !== 'executed') readiness = { ...readiness, ready: false, steps: ran };
       const layer = document.createElement('div');
       layer.id = 'hvy-galaxy-ready-check-matches';
       layer.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none';
