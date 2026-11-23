@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('hvyElectron', {
     ipcRenderer.on('hvy:open-document-path', listener);
     return () => ipcRenderer.removeListener('hvy:open-document-path', listener);
   },
+  onNotificationClick(callback) {
+    const listener = (_event, click) => callback(click);
+    ipcRenderer.on('hvy:notification-click', listener);
+    return () => ipcRenderer.removeListener('hvy:notification-click', listener);
+  },
   onAppCloseRequest(callback) {
     const listener = () => callback();
     ipcRenderer.on('hvy:app-close-requested', listener);

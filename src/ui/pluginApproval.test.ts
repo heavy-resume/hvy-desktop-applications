@@ -31,6 +31,11 @@ describe('plugin approval for the open file', () => {
     expect(renderPluginApprovalDialog(stateWith(blocked, false))).toBe('');
   });
 
+  it('says a plugin only the file\'s scripts call is used by scripts', () => {
+    const dialog = renderPluginApprovalDialog(stateWith([{ id: 'galaxy.notifications', version: '0.1.0', displayName: 'Notifications', blocks: 0 }], true));
+    expect(dialog).toContain('Used by scripts in this file');
+  });
+
   it('saves several approvals for one file at once, and keeps other files', () => {
     const keys = blocked.map((plugin) => pluginAcceptanceKey(plugin));
     const jobs = 'jobs' as FileKey;

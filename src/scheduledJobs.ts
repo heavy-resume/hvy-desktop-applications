@@ -156,6 +156,20 @@ async function runNow(key: FileKey, jobId: string): Promise<void> {
   }
 }
 
+/**
+ * Switches tabs as the user, from outside Galaxy (a notification clicked): between Galaxy's own switches for jobs, and
+ * taken as the user's input, so a job's tab brought up is the user's, not saved and closed when its job is done.
+ */
+export async function switchAsUser(path: string): Promise<void> {
+  const release = await lock();
+  try {
+    await selectDocumentTab(path);
+  } finally {
+    lastInputAt = Date.now();
+    release();
+  }
+}
+
 /** Switches tabs as Galaxy, not the user: not taken as the user taking a job's tab over. */
 async function switchTo(path: string): Promise<void> {
   switching = true;

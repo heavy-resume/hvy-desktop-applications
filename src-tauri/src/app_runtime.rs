@@ -3,6 +3,7 @@ pub fn run() {
     enable_native_spellcheck();
 
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(mcp::McpRuntime::default())
         .manage(mcp::WebMcpBrokerRuntime::default())
         .manage(NativeMenuState::default())

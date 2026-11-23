@@ -125,6 +125,28 @@ The handler gets `{name, size, mediaType, text}`.
 - Scripts count steps, so parse a large file in SQL (its lines handed to
   SQLite as a JSON array), not with a Python loop.
 
+## Notifications
+
+`galaxy.notifications` (`src/plugins/notifications.ts`) has no block: scripts call
+`doc.plugins.call("galaxy.notifications", "notify", {"title", "body", "target"})`
+to show a system notification, such as when a scheduled job finds something. It
+is allowed per file in Galaxy, as Schedule is (`createConditionallyAllowedPlugin`).
+With no block, the approval bar finds it in the file's declared plugins
+(`blockedPlugins`), shown as "Used by scripts". At most 3 are shown in 5 seconds
+and 5 a minute, across the app; the rest are dropped, and `notify` returns false
+for them.
+
+- Electron shows it from the main process (`show_notification`), Tauri with
+  `tauri-plugin-notification`, which reports a click on desktop (`onAction`,
+  `actionId` "tap") only for notifications shown while a listener exists, so
+  startup listens before any document opens. On Windows a click counts only
+  while the toast is on screen, not from the Action Center.
+- A click raises the window, then `openNotificationClick` brings the document
+  forward: its tab if open, else its file, then the mount's `navigateToTarget`
+  (heavy-file-format's reader navigation, as a `#id` link). It switches tabs
+  through the scheduler's lock as user input (`switchAsUser`), so a job's tab
+  brought forward is the user's and isn't saved and closed under them.
+
 ## Dialogs
 
 New dialogs use the shared shell, `renderDialog` in `src/ui/dialog.ts`: the

@@ -222,6 +222,12 @@ export function documentAutomationFor(document: object): DocumentAutomation | nu
   return openedByDocument.get(document) ?? null;
 }
 
+/** The file a document is (its reference, which a rename or move leaves as it is); null for one with none. */
+export function documentFileFor(document: object): RuntimeDocument | null {
+  documentAutomationFor(document);
+  return documentPaths.get(document) ?? null;
+}
+
 /** Document save: each queue block takes its queue's state, just before the document is serialized. */
 export function saveWebAutomationQueues(document: object): void {
   openedByDocument.get(document)?.saveQueues();

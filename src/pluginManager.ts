@@ -144,18 +144,18 @@ export interface BlockedPlugin {
   uuid?: string;
   version: string;
   displayName: string;
-  /** How many of the document's blocks use it. */
+  /** How many of the document's blocks use it: none for a plugin only its scripts call. */
   blocks: number;
 }
 
 /**
- * The plugins a document's blocks use that still need approval in this file:
- * the conditional registrations among the plugins it was mounted with (an
- * approved plugin is mounted as its implementation instead).
+ * The plugins a document uses that still need approval in this file: the conditional registrations among the plugins
+ * it was mounted with (an approved plugin is mounted as its implementation instead) that its blocks use, or that it
+ * declares, for a plugin only its scripts call (Notifications).
  */
-export function blockedPlugins(plugins: HvyPlugin[], blockPluginIds: string[]): BlockedPlugin[] {
+export function blockedPlugins(plugins: HvyPlugin[], blockPluginIds: string[], declaredPluginIds: string[]): BlockedPlugin[] {
   return plugins
-    .filter((plugin) => plugin.authorization === 'required' && blockPluginIds.includes(plugin.id))
+    .filter((plugin) => plugin.authorization === 'required' && (blockPluginIds.includes(plugin.id) || declaredPluginIds.includes(plugin.id)))
     .map((plugin) => ({
       id: plugin.id,
       ...(plugin.uuid ? { uuid: plugin.uuid } : {}),

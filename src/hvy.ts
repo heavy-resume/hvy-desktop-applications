@@ -1,3 +1,4 @@
+import { normalizeHvyPluginDeclarations } from '../../heavy-file-format/src/plugins/declarations';
 import { openAttachmentFile, openExternalUrl, saveAppSettings, saveBinaryAsDialog, type DocumentExtension } from './backend';
 import { NO_FILE } from './runtimeDocuments';
 import { createDesktopEmbeddingProvider, desktopTextProcessingSettings } from './aiClient';
@@ -48,7 +49,7 @@ type HvyRecoveryStateMount = {
   getRecoveryState?: () => string | null;
   applyRecoveryState?: (recoveryState?: string | null) => void;
 };
-type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState' | 'setThemeOverrides'> & {
+type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'getPdfBlob' | 'markSaved' | 'isDirty' | 'undo' | 'redo' | 'buildImportPlan' | 'importFromText' | 'getChatState' | 'setChatState' | 'setThemeOverrides' | 'navigateToTarget'> & {
   encryptDocumentAsync?: HvyEmbedMount['encryptDocumentAsync'];
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
@@ -380,7 +381,7 @@ export async function mountHvyDocument(
     get document() {
       return finalMount.getDocument();
     },
-    blockedPlugins: blockedPlugins(plugins, blockPluginIds),
+    blockedPlugins: blockedPlugins(plugins, blockPluginIds, normalizeHvyPluginDeclarations(document.meta.plugins).map((declaration) => String(declaration.id))),
   };
 }
 
@@ -975,6 +976,8 @@ async function mountRawHvyDocument(
       searchCleanup.abort();
       root.replaceChildren();
     },
+    // Raw text has no reader to scroll to a section in: the document is shown as it is.
+    navigateToTarget() {},
     getDocument() {
       return currentDocument;
     },

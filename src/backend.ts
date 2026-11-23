@@ -19,6 +19,7 @@ declare global {
       invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
       onMenuEvent(callback: (event: string) => void): () => void;
       onOpenDocumentPath(callback: (path: string) => void): () => void;
+      onNotificationClick(callback: (click: NotificationClick) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
       onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
       onIntegrationBrowserEvent(callback: (browserEvent: unknown) => void): () => void;
@@ -1633,6 +1634,51 @@ export function onMenuEvent(handler: (event: string) => void): Promise<() => voi
     return Promise.resolve(() => undefined);
   }
   return listen<string>('menu-event', (event) => handler(event.payload));
+}
+
+/** What a clicked notification was about: the document that sent it, and where in it to go. */
+export interface NotificationClick {
+  /** The document's id while Galaxy runs (runtimeDocuments.ts), and its path when sent, for a document closed since. */
+  documentId: string;
+  path: string;
+  /** A section's or component's id, or empty for the document itself. */
+  target: string;
+}
+
+export interface SystemNotification {
+  title: string;
+  body: string;
+  click: NotificationClick;
+}
+
+/** Shows a system notification. Tauri asks for the system's permission the first time. */
+export async function showSystemNotification(notification: SystemNotification): Promise<void> {
+  if (isElectronRuntime()) {
+    await invokeDesktop<void>('show_notification', { notification });
+    return;
+  }
+  if (!isTauriRuntime()) return;
+  const { isPermissionGranted, requestPermission, sendNotification } = await import('@tauri-apps/plugin-notification');
+  if (!(await isPermissionGranted()) && (await requestPermission()) !== 'granted') return;
+  sendNotification({ title: notification.title, body: notification.body, extra: { ...notification.click } });
+}
+
+/**
+ * A notification clicked, after Galaxy's window is raised. In Tauri, only notifications shown after this listens report
+ * a click, so it listens at startup.
+ */
+export async function onNotificationClick(handler: (click: NotificationClick) => void): Promise<() => void> {
+  if (isElectronRuntime()) return window.hvyElectron!.onNotificationClick(handler);
+  if (!isTauriRuntime()) return () => undefined;
+  const { onAction } = await import('@tauri-apps/plugin-notification');
+  const listener = await onAction((event) => {
+    if (event.actionId !== 'tap') return;
+    const window = getCurrentWindow();
+    void window.unminimize().then(() => window.show()).then(() => window.setFocus());
+    // Desktop reports the notification clicked, with the extra it was sent with.
+    handler(event.notification!.extra as unknown as NotificationClick);
+  });
+  return () => void listener.unregister();
 }
 
 export function onOpenDocumentPath(handler: (path: string) => void): Promise<() => void> {

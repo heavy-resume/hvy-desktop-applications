@@ -26,7 +26,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The SHA-256 fingerprint of a site's certificate (site_security.rs); already built in through other dependencies.
 sha2 = "0.10"
-tauri = { version = "2", features = ["unstable"] }
+tauri = { version = "2.12", features = ["unstable"] }
+# System notifications for scripts (src/plugins/notifications.ts); 2.6+ reports a click on desktop.
+tauri-plugin-notification = "2.8"
 thiserror = "2"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 

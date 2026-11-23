@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, shell, clipboard, session, safeStorage } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, Notification, dialog, ipcMain, shell, clipboard, session, safeStorage } = require('electron');
 const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -80,6 +80,7 @@ const webMcpBrokerPending = new Map();
 function raiseWindow(window) {
   if (!window || window.isDestroyed()) return;
   if (process.platform === 'darwin') app.focus({ steal: true });
+  if (window.isMinimized()) window.restore();
   window.show();
   window.moveTop();
   window.focus();
@@ -106,6 +107,31 @@ app.on('second-instance', (_event, argv, workingDirectory) => {
   }
   raiseWindow(mainWindow);
 });
+
+/**
+ * A script's notification (src/plugins/notifications.ts), settled once the system shows it or refuses it (on macOS, an
+ * app that isn't code-signed: the ad-hoc signed dev app). Clicked, it raises Galaxy and hands the page what the
+ * notification was about. Each is held until clicked or closed: Electron stops reporting a click on one it collected.
+ */
+const shownNotifications = new Set();
+function showNotification(notification) {
+  const shown = new Notification({ title: notification.title, body: notification.body });
+  shownNotifications.add(shown);
+  shown.on('click', () => {
+    shownNotifications.delete(shown);
+    raiseWindow(mainWindow);
+    mainWindow?.webContents.send('hvy:notification-click', notification.click);
+  });
+  shown.on('close', () => shownNotifications.delete(shown));
+  return new Promise((resolve, reject) => {
+    shown.once('show', () => resolve());
+    shown.once('failed', (_event, error) => {
+      shownNotifications.delete(shown);
+      reject(new Error(`The system didn't show the notification: ${error}`));
+    });
+    shown.show();
+  });
+}
 
 app.on('open-file', (event, filePath) => {
   event.preventDefault();
@@ -634,6 +660,7 @@ async function handleCommand(command, args) {
     case 'save_workspace_order': return saveWorkspaceOrder(args.workspaces);
     case 'save_document_mode_preference': return saveDocumentModePreference(args.path, args.mode);
     case 'save_document_color_preference': return saveDocumentColorPreference(args.path, args.useDocumentColors);
+    case 'show_notification': return showNotification(args.notification);
     case 'load_app_settings': return normalizeAppSettings(readJson(dataPath(APP_SETTINGS), defaultAppSettings()));
     case 'save_app_settings': return writeJson(dataPath(APP_SETTINGS), normalizeAppSettings(args.settings));
     case 'load_installed_plugin_packages': return loadInstalledPluginPackages();

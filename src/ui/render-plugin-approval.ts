@@ -31,7 +31,7 @@ export function renderPluginApprovalDialog(state: AppState): string {
       <input class="hvy-galaxy-input" type="checkbox" data-plugin-acceptance-key="${escapeAttr(pluginAcceptanceKey(plugin))}" checked>
       <span class="plugin-approval-option-text">
         <strong>${escapeHtml(plugin.displayName)}</strong>
-        <span class="plugin-approval-option-detail">${plugin.blocks === 1 ? '1 instance' : `${plugin.blocks} instances`} in this file · ${escapeHtml(plugin.id)} ${escapeHtml(plugin.version)}</span>
+        <span class="plugin-approval-option-detail">${plugin.blocks === 0 ? 'Used by scripts' : plugin.blocks === 1 ? '1 instance' : `${plugin.blocks} instances`} in this file · ${escapeHtml(plugin.id)} ${escapeHtml(plugin.version)}</span>
       </span>
     </label>`).join('');
   return `

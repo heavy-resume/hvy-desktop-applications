@@ -8,6 +8,9 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:window:allow-set-theme",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "notification:default"
   ]
 }

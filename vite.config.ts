@@ -148,6 +148,13 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/filePicker.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.notifications',
+    key: 'galaxyNotifications',
+    exportName: 'notificationsPlugin',
+    modulePath: 'src/plugins/notifications.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {

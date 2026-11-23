@@ -1,0 +1,76 @@
+---
+hvy_version: 0.1
+title: Notifications Demo
+reader_max_width: 48rem
+plugins:
+  - id: galaxy.notifications
+    permissions:
+      - scripting
+  - id: hvy.scripting
+  - id: hvy.form
+---
+
+<!--hvy: {"id":"try-it","lock":false,"expanded":true,"highlight":false}-->
+#! Notifications
+
+ <!--hvy:text {"id":"how-to"}-->
+ Press **Notify** for a system notification. Clicking it brings Galaxy forward with this document, at the section named in Target. To check a background tab, press Notify, switch to another tab or minimize Galaxy, then click the notification. **Notify 6 times** shows the limit: 3 in 5 seconds, then the rest are dropped.
+
+ <!--hvy:plugin {"id":"notify-form","plugin":"hvy.form","pluginConfig":{"version":"0.1","showSubmit":true,"formCss":"","actionsCss":"","submitCss":"","initialScript":"","changeScript":"","submitAction":"script","submitSourceScript":"","submitScript":"notify","submitPrompt":"","submitInputCharLimit":4000,"submitOutputCharLimit":4000,"submitLabel":"Notify","submitDisabled":false,"submitDisabledReason":"","scriptLibraries":[],"scriptStepBudget":100000}}-->
+  fields:
+    - label: Title
+      type: text
+      placeholder: Job search
+    - label: Body
+      type: text
+      placeholder: 3 new postings match
+    - label: Target
+      type: text
+      placeholder: found-it
+  scripts:
+    notify: |
+      title = str(doc.form.get_value("Title") or "") or "Job search"
+      body = str(doc.form.get_value("Body") or "") or "3 new postings match"
+      target = str(doc.form.get_value("Target") or "") or "found-it"
+      shown = doc.plugins.call("galaxy.notifications", "notify", {"title": title, "body": body, "target": target})
+      doc.component.set_text("notify-status", "Shown." if shown else "Dropped: over the limit.")
+
+ <!--hvy:plugin {"id":"notify-burst","plugin":"hvy.form","pluginConfig":{"version":"0.1","showSubmit":true,"formCss":"","actionsCss":"","submitCss":"","initialScript":"","changeScript":"","submitAction":"script","submitSourceScript":"","submitScript":"burst","submitPrompt":"","submitInputCharLimit":4000,"submitOutputCharLimit":4000,"submitLabel":"Notify 6 times","submitDisabled":false,"submitDisabledReason":"","scriptLibraries":[],"scriptStepBudget":100000}}-->
+  fields: []
+  scripts:
+    burst: |
+      results = []
+      for n in range(1, 7):
+          shown = doc.plugins.call("galaxy.notifications", "notify", {"title": "Burst " + str(n), "body": "Notification " + str(n) + " of 6", "target": "found-it"})
+          results.append(str(n) + ": " + ("shown" if shown else "dropped"))
+      doc.component.set_text("notify-status", ", ".join(results))
+
+ <!--hvy:text {"id":"notify-status"}-->
+
+<!--hvy: {"id":"filler","lock":false,"expanded":true,"highlight":false}-->
+#! Something Else
+
+ <!--hvy:text {"id":"filler-text"}-->
+ Room to scroll, so going to the target can be seen.
+
+ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+ Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+ Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+
+ Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+ Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+ Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+
+ Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+
+ Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+
+<!--hvy: {"id":"found-it","lock":false,"expanded":true,"highlight":false}-->
+#! Found It
+
+ <!--hvy:text {"id":"found-it-text"}-->
+ A notification's click lands here (target `found-it`).

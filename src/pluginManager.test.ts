@@ -60,13 +60,19 @@ describe('plugins waiting for approval in a file', () => {
   const safe = { id: 'hvy.video', version: '0.1.0', hvyApiVersion: '0.1', displayName: 'Video' };
 
   test('lists the conditional registrations the document uses, with how many blocks use each', () => {
-    expect(blockedPlugins([registration, safe], ['galaxy.web-api', 'hvy.video', 'galaxy.web-api'])).toEqual([
+    expect(blockedPlugins([registration, safe], ['galaxy.web-api', 'hvy.video', 'galaxy.web-api'], ['galaxy.web-api'])).toEqual([
       { id: 'galaxy.web-api', version: '0.1.0', displayName: 'Web API', blocks: 2 },
     ]);
   });
 
+  test('lists a conditional registration only the document\'s scripts use, which it declares but has no block for', () => {
+    expect(blockedPlugins([registration, safe], [], ['galaxy.web-api', 'hvy.video'])).toEqual([
+      { id: 'galaxy.web-api', version: '0.1.0', displayName: 'Web API', blocks: 0 },
+    ]);
+  });
+
   test('leaves out approved plugins, which are mounted as their implementation, and plugins the document does not use', () => {
-    expect(blockedPlugins([implementation, safe], ['galaxy.web-api'])).toEqual([]);
-    expect(blockedPlugins([registration], ['hvy.video'])).toEqual([]);
+    expect(blockedPlugins([implementation, safe], ['galaxy.web-api'], ['galaxy.web-api'])).toEqual([]);
+    expect(blockedPlugins([registration], ['hvy.video'], ['hvy.video'])).toEqual([]);
   });
 });

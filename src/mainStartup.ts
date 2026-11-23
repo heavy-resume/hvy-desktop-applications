@@ -1,7 +1,8 @@
 import { startScheduledJobs } from './scheduledJobs';
 import { startTrace } from './traceLog';
 import { installAiChatClient } from './aiClient';
-import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
+import { openNotificationClick } from './notificationClicks';
+import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onNotificationClick, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
@@ -471,6 +472,8 @@ export async function boot(): Promise<void> {
     await onOpenDocumentPath((path) => {
       void openLaunchDocumentPath(path);
     });
+    // Before any document's script can notify: Tauri reports clicks only on notifications shown after this listens.
+    await onNotificationClick((click) => void openNotificationClick(click));
     const launchDocumentPaths = await loadLaunchDocumentPaths();
     for (const path of launchDocumentPaths) {
       await openLaunchDocumentPath(path);
