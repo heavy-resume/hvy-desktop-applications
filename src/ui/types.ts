@@ -305,6 +305,7 @@ export interface UiHandlers {
   cancelCloseDocument(): void;
   reloadExternalFileChange(): void;
   dismissExternalFileChange(): void;
+  dismissError(): void;
   confirmSaveConflict(): void;
   cancelSaveConflict(): void;
   saveBeforeWorkspaceFileOperation(): void;

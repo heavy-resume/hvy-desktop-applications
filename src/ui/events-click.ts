@@ -654,6 +654,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'reload-external-file-change') handlers.reloadExternalFileChange();
     if (action === 'dismiss-external-file-change') handlers.dismissExternalFileChange();
+    if (action === 'dismiss-error') handlers.dismissError();
     if (action === 'confirm-save-conflict') handlers.confirmSaveConflict();
     if (action === 'cancel-save-conflict') handlers.cancelSaveConflict();
     if (action === 'save-before-workspace-file-operation') handlers.saveBeforeWorkspaceFileOperation();

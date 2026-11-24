@@ -3472,39 +3472,19 @@ fn write_system_file_clipboard(request: SystemFileClipboardRequest) -> AppResult
     if files.is_empty() {
         return Err(AppError::Message("No supported document files to copy.".into()));
     }
-    if !cfg!(target_os = "macos") {
-        return Err(AppError::Message("System file clipboard is currently supported on macOS only.".into()));
-    }
-    run_apple_script(&mac_file_clipboard_write_script(&files))?;
-    Ok(())
+    write_clipboard_file_paths(&files)
 }
 
 #[tauri::command]
 fn read_system_clipboard_text() -> AppResult<String> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        return Err(AppError::Message("System clipboard text read is currently supported on macOS only.".into()));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        run_apple_script("the clipboard as text")
-    }
+    system_clipboard()?.get_text().map_err(clipboard_error)
 }
 
 #[tauri::command]
 fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, target_directory: String) -> AppResult<AddFilesResult> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
-    if !cfg!(target_os = "macos") {
-        return Err(AppError::Message("System file paste is currently supported on macOS only.".into()));
-    }
-    let output = run_apple_script(mac_file_clipboard_read_script())?;
-    let source_paths: Vec<PathBuf> = output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .collect();
+    let source_paths = read_clipboard_file_paths()?;
     if source_paths.is_empty() {
         return Err(AppError::Message("No files are available to paste.".into()));
     }
@@ -3538,44 +3518,42 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
     })
 }
 
-fn mac_file_clipboard_write_script(files: &[PathBuf]) -> String {
-    let file_items = files
-        .iter()
-        .map(|file| format!("POSIX file {}", apple_script_string(&file.to_string_lossy())))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("set the clipboard to {{{file_items}}}")
+fn system_clipboard() -> AppResult<arboard::Clipboard> {
+    arboard::Clipboard::new().map_err(clipboard_error)
 }
 
-fn mac_file_clipboard_read_script() -> &'static str {
-    r#"
-use framework "AppKit"
-use scripting additions
-set pasteboard to current application's NSPasteboard's generalPasteboard()
-set urls to pasteboard's readObjectsForClasses:{current application's NSURL} options:(missing value)
-set filePaths to {}
-if urls is not missing value then
-  repeat with fileUrl in urls
-    if (fileUrl's isFileURL()) as boolean then set end of filePaths to (fileUrl's |path|()) as text
-  end repeat
-end if
-set AppleScript's text item delimiters to linefeed
-return filePaths as text
-"#
-}
-
-fn apple_script_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn run_apple_script(script: &str) -> AppResult<String> {
-    let output = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
-    if !output.status.success() {
-        return Err(AppError::Message(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+fn clipboard_error(error: arboard::Error) -> AppError {
+    match error {
+        arboard::Error::ContentNotAvailable => AppError::Message("The clipboard does not contain that kind of content.".into()),
+        error => AppError::Message(error.to_string()),
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn read_clipboard_file_paths() -> AppResult<Vec<PathBuf>> {
+    match system_clipboard()?.get().file_list() {
+        Ok(paths) => Ok(paths),
+        Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+        Err(error) => Err(clipboard_error(error)),
+    }
+}
+
+fn write_clipboard_file_paths(files: &[PathBuf]) -> AppResult<()> {
+    system_clipboard()?.set().file_list(files).map_err(clipboard_error)
+}
+
+/// Helper-binary entry point used by the Electron shell, which has no native file clipboard API.
+pub fn clipboard_files_cli(args: &[String]) -> Option<Result<String, String>> {
+    if args.iter().any(|arg| arg == "--read-clipboard-files") {
+        return Some(
+            read_clipboard_file_paths()
+                .map(|paths| paths.iter().map(|path| path.to_string_lossy().to_string()).collect::<Vec<_>>().join("
+"))
+                .map_err(|error| error.to_string()),
+        );
+    }
+    let index = args.iter().position(|arg| arg == "--write-clipboard-files")?;
+    let files: Vec<PathBuf> = args[index + 1..].iter().map(PathBuf::from).collect();
+    Some(write_clipboard_file_paths(&files).map(|()| String::new()).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]

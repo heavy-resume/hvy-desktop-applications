@@ -435,10 +435,28 @@
 }
 
 .error-slot.has-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   border-bottom: 1px solid var(--hvy-danger, #e6c0ba);
   background: color-mix(in srgb, var(--hvy-danger, #8c291d) 12%, var(--hvy-surface, #ffffff));
   color: var(--hvy-danger, #8c291d);
   padding: 10px 14px;
+}
+
+.error-slot-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-slot-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -3px -6px -3px 0;
+  font-size: 18px;
+  color: inherit;
 }
 
 .document-stage {

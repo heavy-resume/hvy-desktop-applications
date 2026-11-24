@@ -444,8 +444,29 @@
 }
 
 .plugin-builder-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
   max-width: 58rem;
   margin: 0 auto 1rem;
+}
+
+.plugin-builder-banner-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plugin-builder-banner-close {
+  flex: none;
+  margin: -0.2rem -0.2rem -0.2rem 0;
+  padding: 0 0.3rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .plugin-builder-status {

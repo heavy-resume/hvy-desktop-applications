@@ -159,7 +159,7 @@ export function renderDocumentControls(state: AppState): void {
       ${renderToolbar(state)}
     </header>
     ${renderPluginApprovalBar(state)}
-    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
+    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? `<span class="error-slot-message">${escapeHtml(state.error)}</span><button type="button" class="hvy-galaxy-button icon-button error-slot-close" data-action="dismiss-error" title="Dismiss" aria-label="Dismiss">&times;</button>` : ''}</div>`;
   documentModeControlsRoot().innerHTML = state.document && !workspaceChatActive ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
   const mount = hvyMountRoot();
   mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document && !workspaceChatActive));

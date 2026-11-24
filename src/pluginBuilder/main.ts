@@ -253,7 +253,7 @@ function render(): void {
           </nav>
         </aside>
         <div class="plugin-builder-content">
-          ${state.error ? `<div class="plugin-builder-banner plugin-builder-banner--error" role="alert">${escapeHtml(state.error)}</div>` : ''}
+          ${state.error ? `<div class="plugin-builder-banner plugin-builder-banner--error" role="alert"><span class="plugin-builder-banner-message">${escapeHtml(state.error)}</span><button class="plugin-builder-banner-close" type="button" data-action="dismiss-error" title="Dismiss" aria-label="Dismiss">&times;</button></div>` : ''}
           ${renderProjectDetail(project)}
         </div>
       </div>
@@ -428,6 +428,10 @@ document.addEventListener('click', (event) => {
   if (!target) return;
   if (target.dataset.action === 'open-create' && state.selectedWorkspacePath) {
     state.createModalOpen = true;
+    state.error = '';
+    render();
+  }
+  if (target.dataset.action === 'dismiss-error') {
     state.error = '';
     render();
   }

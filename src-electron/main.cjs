@@ -2809,20 +2809,17 @@ async function writeSystemFileClipboard(request) {
   const paths = Array.isArray(request?.paths) ? request.paths : [];
   const files = paths.map((entry) => String(entry)).filter((entry) => entry && documentExtension(entry) && fs.existsSync(entry));
   if (files.length === 0) throw new Error('No supported document files to copy.');
-  if (process.platform !== 'darwin') {
-    throw new Error('System file clipboard is currently supported on macOS only.');
-  }
-  clipboard.clear();
-  clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(macFileListPlist(files), 'utf8'));
-  clipboard.writeText(files.join('\n'));
+  await runFile(rustHelperPath(), ['--write-clipboard-files', ...files], { encoding: 'utf8', windowsHide: true });
+}
+
+async function readClipboardFilePaths() {
+  const { stdout } = await runFile(rustHelperPath(), ['--read-clipboard-files'], { encoding: 'utf8', windowsHide: true });
+  return stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
 }
 
 async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
-  if (process.platform !== 'darwin') {
-    throw new Error('System file paste is currently supported on macOS only.');
-  }
-  const sourcePaths = readMacClipboardFilePaths();
+  const sourcePaths = await readClipboardFilePaths();
   if (sourcePaths.length === 0) throw new Error('No files are available to paste.');
   const copiedPaths = [];
   const relocatedArchivedFiles = [];
@@ -2847,46 +2844,6 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
     copiedPaths,
     relocatedArchivedFiles,
   };
-}
-
-function macFileListPlist(files) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<array>
-${files.map((file) => `  <string>${xmlEscape(file)}</string>`).join('\n')}
-</array>
-</plist>`;
-}
-
-function readMacClipboardFilePaths() {
-  const plist = clipboard.readBuffer('NSFilenamesPboardType').toString('utf8');
-  const paths = Array.from(plist.matchAll(/<string>([\s\S]*?)<\/string>/g))
-    .map((match) => xmlUnescape(match[1]).trim())
-    .filter(Boolean);
-  if (paths.length > 0) return paths;
-  return clipboard.readText()
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith('/'));
-}
-
-function xmlEscape(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function xmlUnescape(value) {
-  return String(value)
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&gt;/g, '>')
-    .replace(/&lt;/g, '<')
-    .replace(/&amp;/g, '&');
 }
 
 function createDocumentBackup(request) {
