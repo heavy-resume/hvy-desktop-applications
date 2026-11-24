@@ -313,6 +313,32 @@ describe('mock integration: job search flow', () => {
     expect(flow!.item(acmeJob('eng-3'))?.fields.evaluation).toBeUndefined();
   });
 
+  it('7c. background work: busy from the first report queued until the last result is handled, once; a queue paused for the user isn\'t, until Resume', async () => {
+    const boards = listingCollection([ACME]);
+    await signedInFlow(boards);
+    await flow!.collect(boards);
+    const changes: boolean[] = [];
+    flow!.automation.onBusyChange((busy) => changes.push(busy));
+
+    await flow!.evaluate([acmeJob('eng-1'), acmeJob('eng-2')]);
+    expect(changes).toEqual([true, false]);
+    expect(flow!.item(acmeJob('eng-2'))?.fields.evaluation).toBe('ready');
+
+    // Out of credits: the queue pauses with its report still waiting, and nothing comes until the user acts.
+    flow!.service.outOfCredits = true;
+    await flow!.evaluate([acmeJob('pm-1')]);
+    expect(flow!.automation.getState().queues[EVALUATE_QUEUE]).toMatchObject({ paused: true });
+    expect(flow!.automation.isBusy()).toBe(false);
+    expect(changes).toEqual([true, false, true, false]);
+
+    flow!.service.outOfCredits = false;
+    flow!.automation.resumeQueue(EVALUATE_QUEUE);
+    expect(flow!.automation.isBusy()).toBe(true);
+    await flow!.settle();
+    expect(flow!.item(acmeJob('pm-1'))?.fields.evaluation).toBe('ready');
+    expect(changes).toEqual([true, false, true, false, true, false]);
+  });
+
   it('8. sign-out mid-queue: the queue pauses, and signing in again resumes it', async () => {
     const boards = listingCollection([ACME]);
     await signedInFlow(boards);

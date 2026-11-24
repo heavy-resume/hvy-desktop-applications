@@ -70,10 +70,22 @@ function callback(lookup: DocumentAutomationLookup, value: unknown): ((result: R
  */
 function operation(lookup: DocumentAutomationLookup, args: Record<string, unknown>, work: () => Promise<unknown>): unknown {
   // Counted as the document's work until it ends: a scheduled job's document is idle only once nothing is left of it.
-  const run = () => lookup.automation.tracked(work);
   const onComplete = callback(lookup, args.on_complete);
-  if (!onComplete) return run();
-  return queueWebCapabilityScriptOperation(run, { onComplete, onError: callback(lookup, args.on_error) });
+  if (!onComplete) return lookup.automation.tracked(work);
+  // With callbacks, until one is handed the outcome (its call into the script is counted from then): no moment between
+  // the call ending and its script hearing of it looks like the document's work is done.
+  let handedOver = () => undefined as void;
+  void lookup.automation.tracked(() => new Promise<void>((resolve) => {
+    handedOver = resolve;
+  }));
+  const thenHandedOver = (handler: (result: Record<string, unknown>) => Promise<boolean>) => (result: Record<string, unknown>) => {
+    const ran = handler(result);
+    handedOver();
+    return ran;
+  };
+  const onError = callback(lookup, args.on_error);
+  // A call refused before it starts (no profile chosen) is its error callback's, as one that fails later.
+  return queueWebCapabilityScriptOperation(async () => work(), { onComplete: thenHandedOver(onComplete), onError: onError ? thenHandedOver(onError) : null });
 }
 
 function input(value: unknown): Record<string, unknown> {

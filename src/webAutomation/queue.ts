@@ -115,6 +115,10 @@ export class DurableQueue {
   private wake: AbortController | null = null;
   private loops = 0;
   private detached = false;
+  /** Results handed to the handler that its script hasn't finished with yet. */
+  private handing = 0;
+  /** Told when a result's script is done with it (`onHandedOver`): whether the queue has work may have changed. */
+  private handedOver: (() => void) | null = null;
   private target: QueueTarget;
 
   constructor(private readonly deps: {
@@ -255,11 +259,23 @@ export class DurableQueue {
     this.startHandler = handler;
   }
 
+  onHandedOver(listener: () => void): void {
+    this.handedOver = listener;
+  }
+
   onResult(handler: QueueResultHandler): void {
     this.handler = handler;
     for (const entry of this.state.entries.filter((candidate) => !candidate.delivered && FINISHED.includes(candidate.status))) {
       void this.deliver(entry);
     }
+  }
+
+  /**
+   * Background work left: an entry to run or retry (not while paused or waiting for Resume, when nothing comes until the
+   * user acts), or a result its script hasn't finished with.
+   */
+  hasWork(): boolean {
+    return this.handing > 0 || !this.isIdle();
   }
 
   /** True when no entry is queued, running, or waiting to retry, or the queue is paused. */
@@ -286,6 +302,7 @@ export class DurableQueue {
     this.detached = true;
     this.handler = null;
     this.startHandler = null;
+    this.handedOver = null;
     this.wake?.abort();
   }
 
@@ -406,16 +423,22 @@ export class DurableQueue {
   private async deliver(entry: QueueEntry): Promise<void> {
     if (!this.handler || !FINISHED.includes(entry.status)) return;
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
-    this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
-    const base = { key: entry.key, context: entry.context ?? null };
-    const handed = this.handler(entry.status === 'done'
-      ? { ...base, status: 'done', result: entry.result }
-      : entry.status === 'failed'
-        ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.', httpStatus: entry.lastStatus ?? null }
-        : { ...base, status: 'cancelled' });
-    if (!handed) return;
-    const ran = await handed;
-    if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
+    this.handing += 1;
+    try {
+      this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
+      const base = { key: entry.key, context: entry.context ?? null };
+      const handed = this.handler(entry.status === 'done'
+        ? { ...base, status: 'done', result: entry.result }
+        : entry.status === 'failed'
+          ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.', httpStatus: entry.lastStatus ?? null }
+          : { ...base, status: 'cancelled' });
+      if (!handed) return;
+      const ran = await handed;
+      if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
+    } finally {
+      this.handing -= 1;
+      this.handedOver?.();
+    }
   }
 
   private update(key: string, change: (entry: QueueEntry) => QueueEntry): QueueEntry | null {

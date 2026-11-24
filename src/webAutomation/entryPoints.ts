@@ -201,7 +201,29 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
   let lastActivityAt = deps.clock.now();
   const active = () => {
     lastActivityAt = deps.clock.now();
+    noteBusy();
   };
+  // Background work: from what the document's work is, not from a quiet spell. A queue with entries still to run or to
+  // retry (waiting out a backoff, or for a site to be reachable), a collection run going, a call in flight, or a call into
+  // its scripts not yet over. A paused queue, or one waiting for Resume, has nothing coming until the user acts.
+  const busyListeners = new Set<(busy: boolean) => void>();
+  let busy = false;
+  // Calls into its scripts not yet over: waiting their turn, or running.
+  let calling = 0;
+  function isBusy(): boolean {
+    return outstanding > 0
+      || calling > 0
+      || [...queues.values()].some((item) => item.hasWork())
+      || collections.getState().some((run) => run.status === 'running');
+  }
+  function noteBusy(): void {
+    const now = isBusy();
+    if (now === busy) return;
+    busy = now;
+    for (const listener of [...busyListeners]) listener(busy);
+  }
+  // Queues and runs say what they did as events (enqueued, paused, an entry's result handed over, a run ended).
+  const stopWatchingEvents = runtime.events.subscribe(() => noteBusy());
   // Script callbacks for sign-in changes, by capability and key. They do not survive the document closing.
   const sessionWatchers = new Map<string, () => void>();
   // Each script handler's handover of the account's current state, by capability and key: run again once the document
@@ -489,6 +511,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       if (existing) {
         existing.reopen(saved, config);
         existing.attach(call);
+        existing.onHandedOver(noteBusy);
         queues.set(queueId, existing);
         resumeAfterSignIn(queueId, target);
         return;
@@ -505,6 +528,7 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
         network: runtime.network,
       });
       if (saved) item.restore(saved);
+      item.onHandedOver(noteBusy);
       runtime.queues.set(registryKey, item);
       queues.set(queueId, item);
       resumeAfterSignIn(queueId, target);
@@ -572,8 +596,12 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
      * heavy-file-format's limits allow (ScriptCalls). Resolves whether it ran: false if the document closed first.
      */
     callScript(run: () => void): Promise<boolean> {
+      calling += 1;
       active();
-      return scriptCalls.call(run).finally(active);
+      return scriptCalls.call(run).finally(() => {
+        calling -= 1;
+        active();
+      });
     },
 
     /** Work a script of the document started through a plugin (a fetch, a page read, a call): counted until it ends. */
@@ -593,6 +621,15 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       return { outstanding: outstanding + scriptCalls.pending(), lastActivityAt };
     },
 
+    /** Whether the document has background work: see isBusy. */
+    isBusy,
+
+    /** Told each time the document's background work starts or ends (Galaxy turns its undo off while it has some). */
+    onBusyChange(listener: (busy: boolean) => void): () => void {
+      busyListeners.add(listener);
+      return () => busyListeners.delete(listener);
+    },
+
     /** Calls into the document's scripts waiting their turn. */
     scriptCallsPending(): number {
       return scriptCalls.pending();
@@ -602,6 +639,8 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
       scriptCalls.close();
       for (const run of collections.getState()) collections.stop(run.runId);
       for (const item of queues.values()) item.detach();
+      stopWatchingEvents();
+      busyListeners.clear();
       for (const stop of sessionWatchers.values()) stop();
       sessionWatchers.clear();
       sessionHandovers.clear();

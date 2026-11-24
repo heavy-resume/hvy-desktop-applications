@@ -201,6 +201,7 @@ const openDocumentAutomationLookup = (rawDocument: object) => {
     scheduled: () => scheduledDocuments()[automationKey(documentPaths.get(document)) as FileKey] ?? null,
   });
   openedByDocument.set(document, opened);
+  opened.automation.onBusyChange((busy) => backgroundWorkWatchers.get(document)?.(busy));
   syncScheduledDocument(document, file);
   return opened.lookup;
 };
@@ -220,6 +221,21 @@ export function setAutomationChangeMarker(marker: (document: object) => void): v
 export function documentAutomationFor(document: object): DocumentAutomation | null {
   if (!openedByDocument.has(document)) openDocumentAutomationLookup(document);
   return openedByDocument.get(document) ?? null;
+}
+
+/** Who is told when a document's background work starts or ends: its mount, which turns undo off meanwhile. */
+const backgroundWorkWatchers = new Map<object, (busy: boolean) => void>();
+
+/**
+ * A mounted document: told whether it has background work (queues with work left, collection runs, calls, and its
+ * scripts' callbacks) now, if its automation is open, and each time that starts or ends. Stops when the mount goes.
+ */
+export function watchBackgroundWork(document: object, listener: (busy: boolean) => void): () => void {
+  backgroundWorkWatchers.set(document, listener);
+  if (openedByDocument.get(document)?.automation.isBusy()) listener(true);
+  return () => {
+    if (backgroundWorkWatchers.get(document) === listener) backgroundWorkWatchers.delete(document);
+  };
 }
 
 /** Document save: each queue block takes its queue's state, just before the document is serialized. */

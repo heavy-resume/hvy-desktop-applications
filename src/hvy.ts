@@ -17,7 +17,7 @@ import { deserializeDocumentWithDiagnostics } from '../../heavy-file-format/src/
 import { externalHttpUrlFromHref, mailtoLinkFromHref, shouldOpenExternalLinkForClick, type MailtoLink } from './linkOpening';
 import { state } from './state';
 import { blockedPlugins, enabledBuiltInPlugins, enabledDownloadedPlugins, pluginAcceptanceKey, setPluginAcceptances, type BlockedPlugin } from './pluginManager';
-import { hasWebAutomationHost, openWebAutomationLink, releaseWebAutomation, saveWebAutomationQueues, WEB_AUTOMATION_PLUGIN_IDS } from './webAutomation/app';
+import { hasWebAutomationHost, openWebAutomationLink, releaseWebAutomation, saveWebAutomationQueues, watchBackgroundWork, WEB_AUTOMATION_PLUGIN_IDS } from './webAutomation/app';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 import type {
@@ -427,8 +427,14 @@ export function restoreRawHvyAttachmentBytes(
 }
 
 /** Saving writes each queue's state into its block first; unmounting releases the document's automation. */
-function withWebAutomation<T extends Pick<HvyMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync'>>(mount: T): T {
+/**
+ * A document's web automation, with its mount: its queues saved with it, released when it goes, and no undo while it has
+ * background work. Work the document does on its own (queues, collection runs, its scripts' callbacks) is outside
+ * editing it, and undo would keep a copy of its database each step; undo comes back, from there, once the work is done.
+ */
+function withWebAutomation<T extends Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocumentBytes' | 'serializeDocumentBytesAsync' | 'disableUndo' | 'enableUndo'>>(mount: T): T {
   const { destroy, serializeDocumentBytes, serializeDocumentBytesAsync } = mount;
+  const stopWatching = watchBackgroundWork(mount.getDocument(), (busy) => (busy ? mount.disableUndo() : mount.enableUndo()));
   return {
     ...mount,
     serializeDocumentBytes() {
@@ -440,6 +446,7 @@ function withWebAutomation<T extends Pick<HvyMount, 'destroy' | 'getDocument' | 
       return serializeDocumentBytesAsync.call(mount);
     },
     destroy() {
+      stopWatching();
       releaseWebAutomation(mount.getDocument());
       destroy.call(mount);
     },

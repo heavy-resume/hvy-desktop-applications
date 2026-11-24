@@ -149,6 +149,28 @@ document closed before it ran (the queue then keeps that result for the next
 copy). Keep callbacks small too: write what arrived, and leave drawing to the
 document's own hook run.
 
+## No undo during background work
+
+While a mounted document has background work, Galaxy turns its undo off
+(heavy-file-format's `disableUndo`, which also clears the history) and back on
+once it ends (`enableUndo`, starting from there). Undo kept a copy of the whole
+database each 5 s step of script work, and a few hundred steps of a large
+database's scoring ran the page past WebKit's 4 GB limit, which kills it.
+
+"Background work" is worked out from state, not a quiet spell
+(`isBusy`/`onBusyChange` in `src/webAutomation/entryPoints.ts`): a queue with
+entries to run or retry, or a result its script hasn't finished with
+(`DurableQueue.hasWork`); a collection run going; a call in flight, counted with
+callbacks until one is handed its outcome; a call into the document's scripts
+not yet over. A paused queue, or one waiting for Resume, isn't busy. The
+mount's wrapper (`withWebAutomation`, `src/hvy.ts`) listens through
+`watchBackgroundWork` (`src/webAutomation/app.ts`). Only the mounted document
+records undo at all: heavy-file-format records none for scripts run in a
+document that isn't its live one, such as a background tab's.
+
+When adding a new kind of background work, count it there, with no gap
+between it ending and its script hearing of it, or undo comes back on mid-run.
+
 ## Tracing a hang or out-of-memory page
 
 When the app freezes or runs out of memory, devtools is often unusable. The
