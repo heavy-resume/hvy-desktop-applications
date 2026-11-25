@@ -260,10 +260,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .id("save-to-workspace")
         .enabled(false)
         .build(app)?;
-    let document_encryption_unsaved_changes = MenuItemBuilder::new("(unsaved changes)")
-        .id("document-encryption-unsaved-changes")
-        .enabled(false)
-        .build(app)?;
+    let document_encryption_unsaved_changes = document_encryption_unsaved_changes_item(app)?;
     let show_document_encryption_unsaved_changes = app
         .state::<NativeMenuState>()
         .file_menu

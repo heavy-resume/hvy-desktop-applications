@@ -199,6 +199,39 @@ fn set_file_menu_state(menu: &tauri::menu::Menu<tauri::Wry>, state: &FileMenuSta
     Ok(())
 }
 
+fn document_encryption_unsaved_changes_item(app: &AppHandle) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
+    MenuItemBuilder::new("(unsaved changes)")
+        .id("document-encryption-unsaved-changes")
+        .enabled(false)
+        .build(app)
+}
+
+// Adds or removes the item within the live File menu; replacing the whole menu blanks the menu bar on Windows.
+fn set_document_encryption_unsaved_changes_shown(
+    app: &AppHandle,
+    menu: &tauri::menu::Menu<tauri::Wry>,
+    shown: bool,
+) -> AppResult<()> {
+    let file = menu
+        .get("file-menu")
+        .and_then(|item| item.as_submenu().cloned())
+        .ok_or_else(|| AppError::Message("File menu is unavailable.".into()))?;
+    if shown {
+        let items = file.items().map_err(|error| AppError::Message(error.to_string()))?;
+        let position = items
+            .iter()
+            .position(|item| item.id() == "decrypt-document")
+            .ok_or_else(|| AppError::Message("Remove Document Encryption menu item is unavailable.".into()))?;
+        let item = document_encryption_unsaved_changes_item(app).map_err(|error| AppError::Message(error.to_string()))?;
+        file.insert(&item, position + 1)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    } else if let Some(item) = file.get("document-encryption-unsaved-changes") {
+        file.remove(&item)
+            .map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(())
+}
+
 fn set_submenu_item_enabled(
     menu: &Submenu<tauri::Wry>,
     id: &str,

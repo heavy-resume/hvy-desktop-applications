@@ -3733,14 +3733,10 @@ fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, s
         *current = state.clone();
         changed
     };
-    if unsaved_changes_visibility_changed {
-        let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
-        set_file_menu_state(&menu, &state)?;
-        app.set_menu(menu)
-            .map_err(|error| AppError::Message(error.to_string()))?;
-        return Ok(());
-    }
     if let Some(menu) = app.menu() {
+        if unsaved_changes_visibility_changed {
+            set_document_encryption_unsaved_changes_shown(&app, &menu, state.document_encryption_unsaved_changes)?;
+        }
         set_file_menu_state(&menu, &state)?;
     }
     Ok(())
