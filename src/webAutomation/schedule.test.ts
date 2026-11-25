@@ -30,12 +30,12 @@ describe('a schedule block', () => {
 
   it('refuses a job that runs more often than every 5 minutes, a script it doesn\'t have, and an id used twice', () => {
     const read = block({ jobs: [
-      { id: 'often', script: 'fetch_due', everyMinutes: 2 },
+      { id: 'often', script: 'fetch_due', everyMinutes: 1 },
       { id: 'missing', script: 'nowhere', everyMinutes: 60 },
       { id: 'often', script: 'fetch_due', everyMinutes: 60 },
     ] });
     expect(read.ok ? [] : read.errors).toEqual([
-      'Job "often" must run every 5 minutes or more (a whole number of minutes), or at a time of day ("at": "HH:MM").',
+      'Job "often" must run every 2 minutes or more (a whole number of minutes), or at a time of day ("at": "HH:MM").',
       'Job "missing" runs "nowhere", which is not one of the block\'s scripts.',
       'Job id "often" is used twice.',
     ]);
@@ -69,7 +69,7 @@ describe('what the user chose for scheduled documents', () => {
   it('runs a job as often as the user set, never under 5 minutes, and its default again when set back to it', () => {
     const scheduled = scheduledFor(none, '/work/jobs.hvy', 'jobs.hvy', config());
     expect(jobTiming(scheduled, 'fetch-due')).toEqual({ every: 360 });
-    expect(jobTiming(withJobTiming(scheduled, 'fetch-due', { every: 1 }), 'fetch-due')).toEqual({ every: 5 });
+    expect(jobTiming(withJobTiming(scheduled, 'fetch-due', { every: 1 }), 'fetch-due')).toEqual({ every: 2 });
     expect(withJobTiming(withJobTiming(scheduled, 'fetch-due', { every: 60 }), 'fetch-due', { every: 360 }).choices['fetch-due']).toEqual({ on: false });
   });
 
@@ -79,7 +79,7 @@ describe('what the user chose for scheduled documents', () => {
       '': { name: 'nameless' },
       '/never-set-up.hvy': { name: 'never-set-up.hvy', jobs: [{ id: 'a', timing: { every: 60 } }], choices: {} },
     })).toEqual({
-      '/work/jobs.hvy': { name: 'jobs.hvy', idleMinutes: 5, jobs: [{ id: 'a', name: 'a', timing: { every: 5 } }, { id: 'b', name: 'b', timing: { at: '02:00', days: [1] } }], choices: { a: { on: true, timing: { every: 5 } } }, scheduledFrom: { a: 5 }, lastResults: {} },
+      '/work/jobs.hvy': { name: 'jobs.hvy', idleMinutes: 5, jobs: [{ id: 'a', name: 'a', timing: { every: 2 } }, { id: 'b', name: 'b', timing: { at: '02:00', days: [1] } }], choices: { a: { on: true, timing: { every: 2 } } }, scheduledFrom: { a: 5 }, lastResults: {} },
     });
   });
 

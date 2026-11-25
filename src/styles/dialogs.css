@@ -1463,3 +1463,11 @@
   margin: 0;
   color: var(--hvy-warning, #b36b00);
 }
+
+/* A still copy of the window over it while Galaxy switches tabs for a scheduled job (src/ui/screenCover.ts). */
+.screen-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 30000;
+  overflow: hidden;
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SCRIPT_WATCHDOG_WINDOW_MS } from '../../../heavy-file-format/src/plugins/scripting/cycle-coordinator';
+import { HvyDisposedCallbackError } from '../../../heavy-file-format/src/plugins/scripting/callback-lifecycle';
 import { VirtualClock } from '../test/webAutomation/virtualClock';
 import { CALLS_PER_BUDGET, CALLS_PER_WINDOW, ScriptCalls } from './scriptCalls';
 
@@ -40,6 +41,25 @@ describe('calls into a document\'s scripts', () => {
     expect(await Promise.all(done)).toEqual([...Array.from({ length: CALLS_PER_WINDOW }, () => true), false, false]);
     expect(ran).toHaveLength(CALLS_PER_WINDOW);
     expect(await calls.call(() => ran.push(-1))).toBe(false);
+  });
+
+  it('says a call didn\'t run when its script run is gone (replaced or disposed), without reporting it', async () => {
+    const clock = new VirtualClock();
+    const calls = new ScriptCalls(clock);
+    const thrown: unknown[] = [];
+    const onError = (error: unknown) => thrown.push(error);
+    process.on('uncaughtException', onError);
+    try {
+      const replaced = calls.call(() => {
+        throw new HvyDisposedCallbackError('replaced');
+      });
+      const after = calls.call(() => undefined);
+      expect(await Promise.all([replaced, after])).toEqual([false, true]);
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      process.off('uncaughtException', onError);
+    }
+    expect(thrown).toEqual([]);
   });
 
   it('keeps going after a call that throws', async () => {

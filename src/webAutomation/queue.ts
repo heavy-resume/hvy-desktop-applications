@@ -275,7 +275,12 @@ export class DurableQueue {
    * user acts), or a result its script hasn't finished with.
    */
   hasWork(): boolean {
-    return this.handing > 0 || !this.isIdle();
+    return this.handing > 0 || !this.isIdle() || this.holdsResults();
+  }
+
+  /** A result its script hasn't had yet, with a handler there to give it to: the document still has it to deal with. */
+  private holdsResults(): boolean {
+    return this.handler !== null && this.state.entries.some((entry) => !entry.delivered && FINISHED.includes(entry.status));
   }
 
   /** True when no entry is queued, running, or waiting to retry, or the queue is paused. */
@@ -421,20 +426,26 @@ export class DurableQueue {
 
   /** Resolves once the handler has handled it (its script has run). */
   private async deliver(entry: QueueEntry): Promise<void> {
-    if (!this.handler || !FINISHED.includes(entry.status)) return;
+    const handler = this.handler;
+    if (!handler || !FINISHED.includes(entry.status)) return;
     this.update(entry.key, (current) => ({ ...current, delivered: true }));
     this.handing += 1;
     try {
       this.deps.emit('queue', `${this.deps.id}: ${entry.status} ${entry.key}${entry.status === 'failed' ? ` (${entry.lastError ?? 'Failed.'})` : ''}`);
       const base = { key: entry.key, context: entry.context ?? null };
-      const handed = this.handler(entry.status === 'done'
+      const handed = handler(entry.status === 'done'
         ? { ...base, status: 'done', result: entry.result }
         : entry.status === 'failed'
           ? { ...base, status: 'failed', error: entry.lastError ?? 'Failed.', httpStatus: entry.lastStatus ?? null }
           : { ...base, status: 'cancelled' });
       if (!handed) return;
       const ran = await handed;
-      if (!ran) this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
+      if (!ran) {
+        const kept = this.update(entry.key, (current) => (current.idempotencyKey === entry.idempotencyKey ? { ...current, delivered: false } : current));
+        // A handler registered meanwhile (the document's load script ran again) didn't get it when it registered, since it
+        // was out being handed over: it gets it now.
+        if (kept?.idempotencyKey === entry.idempotencyKey && !kept.delivered && this.handler && this.handler !== handler) void this.deliver(kept);
+      }
     } finally {
       this.handing -= 1;
       this.handedOver?.();

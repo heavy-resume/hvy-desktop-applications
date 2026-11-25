@@ -75,6 +75,54 @@ describe('DurableQueue', () => {
     expect(queues.every((queue) => queue.isIdle())).toBe(true);
   });
 
+  it('has work while a result waits for its script: one its handler couldn\'t run is held until a handler takes it', async () => {
+    const clock = new VirtualClock();
+    const { queue } = createQueue(clock, 1);
+    // The document's callbacks were gone when the result came: the handler says it didn't run.
+    let running = false;
+    queue.onResult(async () => running);
+    queue.enqueue('a', 'a');
+    await runUntilIdle(clock, queue);
+    for (let step = 0; step < 5; step += 1) await clock.step();
+    expect(queue.isIdle()).toBe(true);
+    expect(queue.hasWork()).toBe(true);
+    // A handler that runs (the document's load script registering again) takes it, and the work is done.
+    running = true;
+    queue.onResult(async () => running);
+    for (let step = 0; step < 5; step += 1) await clock.step();
+    expect(queue.hasWork()).toBe(false);
+  });
+
+  it('gives a result to the handler registered while it was out being handed to a replaced one', async () => {
+    const clock = new VirtualClock();
+    const { queue } = createQueue(clock, 1);
+    const handled: string[] = [];
+    // The load script's first run: its handler is called, but by the time it would run, the script ran again.
+    let replaced: (ran: boolean) => void = () => undefined;
+    queue.onResult(() => new Promise<boolean>((resolve) => { replaced = resolve; }));
+    queue.enqueue('a', 'a');
+    await runUntilIdle(clock, queue);
+    for (let step = 0; step < 5; step += 1) await clock.step();
+    // The second run registers its handler (the result is out, so isn't given again yet), then the first says it didn't run.
+    queue.onResult(async (result) => {
+      handled.push(String(result.key));
+      return true;
+    });
+    replaced(false);
+    for (let step = 0; step < 5; step += 1) await clock.step();
+    expect(handled).toEqual(['a']);
+    expect(queue.hasWork()).toBe(false);
+  });
+
+  it('has no work for a result nothing has registered to take, as a queue whose document never asked for results', async () => {
+    const clock = new VirtualClock();
+    const { queue } = createQueue(clock, 1);
+    queue.enqueue('a', 'a');
+    await runUntilIdle(clock, queue);
+    expect(queue.getState().entries.map((entry) => [entry.status, entry.delivered])).toEqual([['done', false]]);
+    expect(queue.hasWork()).toBe(false);
+  });
+
   it('runs every entry enqueued together, whatever its concurrency', async () => {
     for (const concurrency of [1, 2, 3]) {
       const clock = new VirtualClock();

@@ -1,4 +1,5 @@
 import { SCRIPT_REPEAT_LIMIT, SCRIPT_WATCHDOG_WINDOW_MS } from '../../../heavy-file-format/src/plugins/scripting/cycle-coordinator';
+import { HvyDisposedCallbackError } from '../../../heavy-file-format/src/plugins/scripting/callback-lifecycle';
 import type { Clock } from './clock';
 
 /**
@@ -38,7 +39,10 @@ export class ScriptCalls {
 
   constructor(private readonly clock: Clock) {}
 
-  /** Resolves true once the call has run, or false if the document closed first (it never runs). */
+  /**
+   * Resolves true once the call has run, or false if it never did: the document closed first, or the script run that
+   * registered the callback was replaced or disposed (heavy-file-format's HvyDisposedCallbackError).
+   */
   call(run: () => void): Promise<boolean> {
     if (this.closed) return Promise.resolve(false);
     const ran = new Promise<boolean>((settle) => this.waiting.push({ run, settle }));
@@ -80,16 +84,19 @@ export class ScriptCalls {
         const next = this.waiting.shift()!;
         this.startedAt.push(this.clock.now());
         this.callsInARow += 1;
+        let ran = true;
         try {
           next.run();
         } catch (error) {
-          // Reported as an uncaught error is, without stopping the calls after it.
-          queueMicrotask(() => {
+          // A callback whose script run is gone didn't run: its caller keeps what it was handed, for the next run's.
+          if (error instanceof HvyDisposedCallbackError) ran = false;
+          // Anything else is reported as an uncaught error is, without stopping the calls after it.
+          else queueMicrotask(() => {
             throw error;
           });
         } finally {
           this.lastEndedAt = this.clock.now();
-          next.settle(true);
+          next.settle(ran);
         }
       }
     } finally {

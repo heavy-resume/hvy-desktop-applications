@@ -7,7 +7,7 @@ import { state } from './state';
 import { availableRecoveryBackups, recoveryDraftIdentity, recoverySaveConflictKind, type SaveConflictKind } from './recoveryDocuments';
 import { documentNameFromFirstTextLine, pdfFileName, savedVersionDocumentName } from './mainUtilities';
 import { refreshOpenWorkspaceForFile } from './mainWorkspaceUtils';
-import { activateWorkspaceChatDocument, adoptSavedAsDocument, captureMountScrollRatio, documentSessions, deleteDocumentSession, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
+import { activateWorkspaceChatDocument, adoptSavedAsDocument, hasParkedMount, captureMountScrollRatio, documentSessions, deleteDocumentSession, getTabStackIndex, markDocumentTabOpened, mountCurrentDocument, mountRoot, openDocument, preserveCurrentDocumentSession, readDocumentColorPreference, refreshRecents, removeDocumentTabPath, renderAllAroundDocument, rerender, resetMountLifecycleState, restoreMountScrollRatio, runBusy, setPendingMountState, syncDocumentTabs, updateCurrentDocumentSession, updateDirtyChrome, workspaceFilterDocumentCache, writeHotReloadSessionSnapshot } from './main';
 import { clearWebRecordResults } from './webRecordResults';
 import { currentWorkspaceChatDocumentPath, isWorkspaceChatDocumentPath, requestCloseWorkspaceChat } from './workspaceChat';
 import { listSavedDocumentVersions, materializeSavedDocumentVersion, recordSuccessfulDocumentSave } from './documentHistory';
@@ -326,7 +326,7 @@ export async function selectDocumentTab(path: string): Promise<void> {
     return;
   }
   const session = documentSessions.get(path);
-  if (session?.dirty || session?.isNew || session?.readOnly || session?.virtual === 'versionHistory' || session?.recoveryState) {
+  if (session?.dirty || session?.isNew || session?.readOnly || session?.virtual === 'versionHistory' || session?.recoveryState || (session && hasParkedMount(path))) {
     await openDocument({
       path: session.source.path,
       name: session.source.name,

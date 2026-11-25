@@ -13,20 +13,24 @@ const automation = vi.hoisted(() => {
     pluginAuthorization: () => 'enabled',
     // Whether the job's document has background work left (entryPoints.ts isBusy).
     busy: false,
-    automation: { isBusy: () => opened.busy },
+    automation: { isBusy: () => opened.busy, getState: () => ({ queues: {}, runs: [] }) },
   };
   return opened;
 });
+// The job's document's mount: its load scripts done once whenLoaded resolves.
+const mount = vi.hoisted(() => ({ whenLoaded: async () => undefined as void }));
+const scripting = vi.hoisted(() => ({ runUserScript: vi.fn(async () => ({ ok: true })) }));
 const schedule = vi.hoisted(() => ({
   blockId: 'schedule',
   config: { jobs: [{ id: 'fetch', name: 'Fetch', script: 'fetch_due' }], paused: {}, scripts: { fetch_due: '' }, scriptLibraries: [] },
 }));
 
 vi.mock('./main', () => mainMocks);
+vi.mock('./ui/screenCover', () => ({ behindScreenCover: (task: () => Promise<unknown>) => task() }));
 vi.mock('./backend', async (importOriginal) => ({ ...await importOriginal<typeof import('./backend')>(), saveAppSettings: vi.fn(async (settings: unknown) => settings) }));
 vi.mock('./webAutomation/app', () => ({ documentAutomationFor: () => automation }));
 vi.mock('./webAutomation/documentBlocks', () => ({ readWebAutomationBlocks: () => ({ schedules: [schedule] }) }));
-vi.mock('../../heavy-file-format/src/plugins/scripting/wrapper', () => ({ runUserScript: async () => ({ ok: true }) }));
+vi.mock('../../heavy-file-format/src/plugins/scripting/wrapper', () => scripting);
 
 import { startScheduledJobs } from './scheduledJobs';
 import { resetRuntimeDocuments, runtimeDocumentForFile, updateRuntimeDocumentFile } from './runtimeDocuments';
@@ -42,6 +46,8 @@ describe('scheduled jobs', () => {
     state.document = null;
     state.scheduledJobRuns = {};
     automation.busy = false;
+    mount.whenLoaded = async () => undefined;
+    scripting.runUserScript.mockClear();
     mainMocks.saveCurrentDocument.mockClear();
     mainMocks.closeCurrentDocument.mockClear();
     startScheduledJobs();
@@ -57,7 +63,7 @@ describe('scheduled jobs', () => {
     state.appSettings = { ...state.appSettings, scheduledDocuments: { [file.documentId]: { name: 'jobs.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
     // Opening the job's document makes it the open document, as the app does.
     mainMocks.selectDocumentTab.mockImplementation(async () => {
-      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
+      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {}, mount } } as never;
     });
 
     await runScheduledJobNow(file.documentId, 'fetch');
@@ -71,12 +77,32 @@ describe('scheduled jobs', () => {
     expect(state.scheduledJobRuns).toEqual({});
   });
 
+  it('runs the job\'s script once its document has loaded, not while its load scripts still run', async () => {
+    const file = runtimeDocumentForFile({ path: '/workspace/finra.hvy', name: 'finra.hvy', extension: '.hvy' });
+    state.appSettings = { ...state.appSettings, scheduledDocuments: { [file.documentId]: { name: 'finra.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
+    mainMocks.selectDocumentTab.mockReset();
+    mainMocks.selectDocumentTab.mockImplementation(async () => {
+      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {}, mount } } as never;
+    });
+    let loaded: () => void = () => undefined;
+    mount.whenLoaded = () => new Promise<void>((resolve) => { loaded = resolve; });
+
+    const run = runScheduledJobNow(file.documentId, 'fetch');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mainMocks.selectDocumentTab).toHaveBeenCalled();
+    expect(scripting.runUserScript).not.toHaveBeenCalled();
+
+    loaded();
+    await run;
+    expect(scripting.runUserScript).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps the tab it opened while its document has background work, however quiet, and saves and closes it once that ends', async () => {
     const file = runtimeDocumentForFile({ path: '/workspace/finra.hvy', name: 'finra.hvy', extension: '.hvy' });
     state.appSettings = { ...state.appSettings, scheduledDocuments: { [file.documentId]: { name: 'finra.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
     mainMocks.selectDocumentTab.mockReset();
     mainMocks.selectDocumentTab.mockImplementation(async () => {
-      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
+      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {}, mount } } as never;
     });
 
     // Its download waits for a queue slot: nothing happens in it for an hour, but its work isn't done.
@@ -104,7 +130,7 @@ describe('scheduled jobs', () => {
     mainMocks.selectDocumentTab.mockImplementation((path: string) => new Promise<void>((resolve) => {
       opened = () => {
         const file = files.find((candidate) => candidate.path === path || candidate.workingVersionId === path)!;
-        state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
+        state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {}, mount } } as never;
         resolve();
       };
     }));
@@ -139,7 +165,7 @@ describe('scheduled jobs', () => {
     state.appSettings = { ...state.appSettings, scheduledJobsAtOnce: 1, scheduledDocuments: { [file.documentId]: { name: 'waits.hvy', idleMinutes: 5, jobs: [{ id: 'fetch', name: 'Fetch', timing: { every: 60 } }], choices: { fetch: { on: true } }, scheduledFrom: { fetch: 0 }, lastResults: {} } } };
     mainMocks.selectDocumentTab.mockReset();
     mainMocks.selectDocumentTab.mockImplementation(async () => {
-      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
+      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {}, mount } } as never;
     });
     const tick = vi.mocked(window.setInterval).mock.calls.at(-1)![0] as () => void;
     const input = vi.mocked(window.addEventListener).mock.calls.find(([type]) => type === 'keydown')![1] as () => void;

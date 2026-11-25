@@ -153,7 +153,7 @@ export interface QueueBlockConfig {
 }
 
 /** The shortest a scheduled job may be set to run every, by its document or by the user. */
-export const SCHEDULE_MIN_MINUTES = 5;
+export const SCHEDULE_MIN_MINUTES = 2;
 /** And the longest: a year. */
 export const SCHEDULE_MAX_MINUTES = 525_600;
 

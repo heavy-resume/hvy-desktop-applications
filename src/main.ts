@@ -9,7 +9,7 @@ import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
-import { releaseWebAutomation, setAutomationChangeMarker, setOpenDocumentCheck } from './webAutomation/app';
+import { hasBackgroundWork, releaseWebAutomation, setAutomationChangeMarker, setOpenDocumentCheck, watchBackgroundWork } from './webAutomation/app';
 import { removeRuntimeDocument, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile, type RuntimeDocument } from './runtimeDocuments';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -96,20 +96,94 @@ export const documentSessions = new Map<string, DocumentSession>();
 export function deleteDocumentSession(versionId: string): void {
   const session = documentSessions.get(versionId);
   documentSessions.delete(versionId);
+  takeParkedMount(versionId)?.mounted.mount.destroy();
   if (session) releaseWebAutomation(session.document);
 }
 // A document stays open while it is in the document pane or a background tab; web automation closes only then.
 setOpenDocumentCheck((document) => state.document?.mounted?.document === document || [...documentSessions.values()].some((session) => session.document === document));
-// Its automation wrote into a document in a background tab (a fetch still running after you switched away, a scheduled
-// job): it is unsaved from then, so switching back keeps what was written rather than reading the file again.
-setAutomationChangeMarker((document) => {
+/**
+ * A document in a background tab changed (its automation wrote into it, or its scripts did, while its mount was kept):
+ * it is unsaved from then, so switching back keeps what was written rather than reading the file again.
+ */
+function markBackgroundDocumentChanged(document: object): void {
   if (state.document?.mounted?.document === document) return;
   const session = [...documentSessions.values()].find((candidate) => candidate.document === document);
   if (!session || session.dirty) return;
   session.dirty = true;
   syncDocumentTabs();
   rerender({ preserveMountedDocument: true });
-});
+}
+setAutomationChangeMarker(markBackgroundDocumentChanged);
+
+/**
+ * Mounts kept for tabs switched away from while their document has background work, by tab. A document's scripts only
+ * hear their callbacks (queue results, finished calls) while it is mounted, so its mount stays, detached (nothing drawn,
+ * its callbacks still running), until the work ends (then it goes, and the tab is a session as any other) or the tab
+ * closes. Its pane element goes with it, out of the page: the listeners Galaxy's mount wrappers bound to it (links,
+ * attachments, chat resizing) stay with that mount, not the next tab's. Switching back puts the element back in the pane
+ * and attaches the same mount to it, drawn again: nothing is loaded or run again.
+ */
+interface ParkedMount {
+  root: HTMLElement;
+  mounted: MountedDocument;
+  stopWatching: () => void;
+}
+const parkedMounts = new Map<string, ParkedMount>();
+
+/** The document pane's mount, as its tab is switched away from: kept while its document has background work, or destroyed. */
+function releaseCurrentMount(): void {
+  const current = state.document;
+  const mounted = current?.mounted;
+  if (!current || !mounted) return;
+  if (!mountRoot || current.virtual || !hasBackgroundWork(mounted.document)) {
+    mounted.mount.destroy();
+    return;
+  }
+  // The pane gets a fresh element for the next tab; this one leaves the page with its mount.
+  const root = mountRoot;
+  const fresh = globalThis.document.createElement('div');
+  fresh.id = root.id;
+  fresh.className = 'document-host';
+  root.replaceWith(fresh);
+  mounted.mount.detach?.();
+  mountRoot = fresh;
+  current.mounted = null;
+  mountThemeReapplyCleanup?.();
+  mountThemeReapplyCleanup = null;
+  const versionId = current.versionId;
+  const stopWatching = watchBackgroundWork(mounted.document, (busy) => {
+    if (!busy) takeParkedMount(versionId)?.mounted.mount.destroy();
+  });
+  parkedMounts.set(versionId, { root, mounted, stopWatching });
+}
+
+/** Whether a tab's mount is kept: switching to it puts that back, so its file needn't be read. */
+export function hasParkedMount(versionId: string): boolean {
+  return parkedMounts.has(versionId);
+}
+
+/** A tab's kept mount, no longer kept: the caller puts it back in the pane, or destroys it. */
+function takeParkedMount(versionId: string): ParkedMount | null {
+  const parked = parkedMounts.get(versionId);
+  if (!parked) return null;
+  parkedMounts.delete(versionId);
+  parked.stopWatching();
+  return parked;
+}
+
+/** A kept mount back in the document pane, as the open document's: as mountCurrentDocument leaves a new one. */
+function restoreParkedMount(parked: ParkedMount): void {
+  if (!state.document || !mountRoot) return;
+  mountRoot.replaceWith(parked.root);
+  parked.mounted.mount.attach?.(parked.root);
+  mountRoot = parked.root;
+  parked.mounted.generation = ++mountGeneration;
+  state.document.mounted = parked.mounted;
+  applyAppColorTheme();
+  mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
+  applyDocumentZoom();
+  renderAllAroundDocument();
+}
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
 let documentChangeEventCount = 0;
@@ -304,8 +378,8 @@ export function activateWorkspaceChatDocument(): void {
   const source = runtimeDocumentForFile({ path, name: currentWorkspaceChatDocumentName(), extension: '.hvy' });
   preserveCurrentDocumentSession();
   markDocumentTabOpened(path);
+  releaseCurrentMount();
   resetMountLifecycleState();
-  state.document?.mounted?.mount.destroy();
   state.document = {
     documentId: source.documentId,
     versionId: path,
@@ -345,12 +419,12 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     workspaceFilterDocumentCache.delete(file.path);
   }
   markDocumentTabOpened(versionId);
-  measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, () => {
-    state.document?.mounted?.mount.destroy();
-  });
+  measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, releaseCurrentMount);
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(versionId);
   const viewSession = storedSession;
-  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory' || storedSession?.recoveryState
+  // A tab whose mount was kept (its document had background work) comes back as it is: its document, and its session.
+  const parked = storedSession ? takeParkedMount(versionId) : null;
+  const session = parked || storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory' || storedSession?.recoveryState
     ? storedSession
     : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
@@ -369,7 +443,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
       };
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.readOnly || options.defaultDocument === true);
   const configuredHiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
-  const document = session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
+  const document = parked?.mounted.document ?? session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
     'load',
     'openDocument:deserialize',
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
@@ -458,8 +532,9 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     return;
   }
   measureDebug('load', 'openDocument:rerenderBeforeMount', { path: file.path }, () => rerender());
-  await mountCurrentDocument(document);
-  if (recoveryState && state.document?.mounted) {
+  if (parked) restoreParkedMount(parked);
+  else await mountCurrentDocument(document);
+  if (!parked && recoveryState && state.document?.mounted) {
     measureDebug('load', 'openDocument:applyRecoveryState', { path: file.path }, () => {
       applyMountedRecoveryState(state.document!.mounted!, recoveryState);
     });
@@ -728,7 +803,11 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
         }
       : undefined,
     onDocumentChange: (event) => {
-      if (generation !== mountGeneration) return;
+      // A mount no longer the pane's (kept for its tab's background work): its changes leave that tab unsaved.
+      if ((baselineMount?.generation ?? generation) !== mountGeneration) {
+        if (event.dirty) markBackgroundDocumentChanged(document);
+        return;
+      }
       const changeStartedAt = performance.now();
       const dirtyBefore = state.document?.dirty ?? null;
       if (event.dirty && documentZoomDirtySuppressionDepth > 0) {
@@ -763,6 +842,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     },
   }));
   mounted.unsavedBaseline = mountStartedDirty;
+  mounted.generation = generation;
   baselineMount = mounted;
   if (pendingMountRecoveryState) {
     measureDebug('load', 'mountCurrentDocument:applyPendingRecoveryState', { path }, () => {

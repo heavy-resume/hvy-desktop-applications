@@ -204,7 +204,9 @@ const openDocumentAutomationLookup = (rawDocument: object) => {
     scheduled: () => scheduledDocuments()[automationKey(documentPaths.get(document)) as FileKey] ?? null,
   });
   openedByDocument.set(document, opened);
-  opened.automation.onBusyChange((busy) => backgroundWorkWatchers.get(document)?.(busy));
+  opened.automation.onBusyChange((busy) => {
+    for (const listener of [...(backgroundWorkWatchers.get(document) ?? [])]) listener(busy);
+  });
   syncScheduledDocument(document, file);
   return opened.lookup;
 };
@@ -226,19 +228,30 @@ export function documentAutomationFor(document: object): DocumentAutomation | nu
   return openedByDocument.get(document) ?? null;
 }
 
-/** Who is told when a document's background work starts or ends: its mount, which turns undo off meanwhile. */
-const backgroundWorkWatchers = new Map<object, (busy: boolean) => void>();
+/**
+ * Who is told when a document's background work starts or ends: its mount, which turns undo off meanwhile, and a mount
+ * kept for a tab switched away from, which goes once the work ends.
+ */
+const backgroundWorkWatchers = new Map<object, Set<(busy: boolean) => void>>();
 
 /**
  * A mounted document: told whether it has background work (queues with work left, collection runs, calls, and its
  * scripts' callbacks) now, if its automation is open, and each time that starts or ends. Stops when the mount goes.
  */
 export function watchBackgroundWork(document: object, listener: (busy: boolean) => void): () => void {
-  backgroundWorkWatchers.set(document, listener);
+  const listeners = backgroundWorkWatchers.get(document) ?? new Set();
+  backgroundWorkWatchers.set(document, listeners);
+  listeners.add(listener);
   if (openedByDocument.get(document)?.automation.isBusy()) listener(true);
   return () => {
-    if (backgroundWorkWatchers.get(document) === listener) backgroundWorkWatchers.delete(document);
+    listeners.delete(listener);
+    if (!listeners.size && backgroundWorkWatchers.get(document) === listeners) backgroundWorkWatchers.delete(document);
   };
+}
+
+/** Whether a document has background work now (see watchBackgroundWork); false when its automation isn't open. */
+export function hasBackgroundWork(document: object): boolean {
+  return openedByDocument.get(document)?.automation.isBusy() ?? false;
 }
 
 /** Document save: each queue block takes its queue's state, just before the document is serialized. */

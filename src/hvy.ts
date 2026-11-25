@@ -53,6 +53,11 @@ type HvyMount = Pick<HvyEmbedMount, 'destroy' | 'getDocument' | 'serializeDocume
   openDocumentMeta?: HvyEmbedMount['openDocumentMeta'];
   setSearchSnapshot?: HvyEmbedMount['setSearchSnapshot'];
   getSearchSnapshot?: HvyEmbedMount['getSearchSnapshot'];
+  /** Resolves once the document's load scripts (its first documentLoad hook run) are done; raw mode has none. */
+  whenLoaded?: HvyEmbedMount['whenLoaded'];
+  /** Takes the document out of its element, its scripts' callbacks still running, and draws it into one again; raw mode has neither. */
+  detach?: HvyEmbedMount['detach'];
+  attach?: HvyEmbedMount['attach'];
 } & HvyRecoveryStateMount;
 type SearchSnapshotMount = HvyMount & { getSearchSnapshot: HvyEmbedMount['getSearchSnapshot'] };
 export type VisualDocument = ReturnType<HvyEmbedModule['deserializeDocumentBytes']>;
@@ -86,6 +91,8 @@ export interface MountedDocument {
   changeCount?: number;
   /** Plugins this document uses that still need approval in this file. */
   blockedPlugins?: BlockedPlugin[];
+  /** Which mounting of the document pane this is (main.ts): its changes count for the open document only while current. */
+  generation?: number;
 }
 
 export function powerScriptDescriptors(document: VisualDocument): Array<{ id: string; hash: string }> {

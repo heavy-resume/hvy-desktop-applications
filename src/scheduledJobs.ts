@@ -2,6 +2,8 @@ import type { VisualDocument } from '../../heavy-file-format/src/types';
 import { closeCurrentDocument, documentSessions, rerender, saveCurrentDocument, selectDocumentTab } from './main';
 import { runtimeDocumentById, type FileKey, type RuntimeDocument } from './runtimeDocuments';
 import { state } from './state';
+import { trace } from './traceLog';
+import { behindScreenCover } from './ui/screenCover';
 import { documentAutomationFor } from './webAutomation/app';
 import { SCHEDULE_PLUGIN_ID } from './webAutomation/configs';
 import { readWebAutomationBlocks } from './webAutomation/documentBlocks';
@@ -84,6 +86,7 @@ function scheduledFile(key: FileKey): RuntimeDocument {
 /** What due jobs wait for, shown with each (its next turn's place): drawn again when it changes. */
 function setWaits(waits: Record<string, string>): void {
   if (JSON.stringify(waits) === JSON.stringify(state.scheduledJobWaits)) return;
+  trace('scheduledJobs:waits', waits);
   state.scheduledJobWaits = waits;
   rerender({ preserveMountedDocument: true });
 }
@@ -91,6 +94,7 @@ function setWaits(waits: Record<string, string>): void {
 /** A file's job ended its turn. */
 function record(file: RuntimeDocument, jobId: string, result: ScheduledJobResult): void {
   const key = file.documentId;
+  trace('scheduledJobs:result', { file: file.path, job: jobId, ...result });
   updateScheduledDocuments((documents) => (documents[key] ? { ...documents, [key]: withJobResult(documents[key], jobId, result) } : documents));
 }
 
@@ -172,8 +176,17 @@ function setBusy(file: RuntimeDocument, busy: { job: string; problem?: string } 
   rerender({ preserveMountedDocument: true });
 }
 
-/** Triggers a document's job: as if its button were pressed in it, then back to the user's tab. Its tab is watched apart. */
+/**
+ * Triggers a document's job. When it isn't the tab the user is on, the switch there and back happens under a still copy
+ * of the window, so it isn't seen.
+ */
 async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
+  if (state.document?.documentId === file.documentId) await triggerJob(file, jobId);
+  else await behindScreenCover(() => triggerJob(file, jobId));
+}
+
+/** Triggers a document's job: as if its button were pressed in it, then back to the user's tab. Its tab is watched apart. */
+async function triggerJob(file: RuntimeDocument, jobId: string): Promise<void> {
   const startedAt = Date.now();
   const { [scheduledJobKey(file.documentId, jobId)]: _started, ...waits } = state.scheduledJobWaits;
   setWaits(waits);
@@ -190,6 +203,9 @@ async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
     fail(`Its document couldn’t be opened: ${error instanceof Error ? error.message : String(error)}`);
     return;
   }
+  // As a person would, the job's button is pressed once the document has loaded: its load scripts done (they register
+  // what its script's work answers to), not while they still run.
+  if (state.document?.documentId === file.documentId) await state.document.mounted?.mount.whenLoaded?.();
   const document = state.document?.documentId === file.documentId ? state.document?.mounted?.document as VisualDocument | undefined : undefined;
   const versionId = state.document?.versionId ?? file.path;
   const back = async () => {
@@ -230,6 +246,7 @@ async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
     libraries: schedule.config.scriptLibraries,
     startedByUser: false,
   });
+  trace('scheduledJobs:script', { file: file.path, job: job.id, ok: result.ok, error: result.error ?? null, steps: result.stepsExecuted, toolCalls: result.toolCalls });
   // Its turn, triggered: what the script started is the document's from here.
   // A failure's one line (heavy-file-format's error, with the script's line), not its traceback.
   record(file, jobId, result.ok ? { at: startedAt, outcome: 'triggered' } : { at: startedAt, outcome: 'failed', message: result.error ?? 'Its script failed.' });
@@ -267,7 +284,9 @@ async function watchUntilDone(
     }
     // Done once it has no background work left (isBusy, from what its queues, runs, calls, and script calls are): work
     // still waiting its turn, a backoff, or the network keeps it open.
-    if (automation.automation.isBusy()) {
+    const busy = automation.automation.isBusy();
+    trace('scheduledJobs:watch', { file: file.path, job: jobName, busy, ...backgroundWork(automation) });
+    if (busy) {
       if (Date.now() - startedAt >= NEVER_IDLE_MS) {
         end('what it started didn’t finish');
         return;
@@ -285,12 +304,25 @@ async function watchUntilDone(
     const release = tryLock();
     if (!release) continue;
     try {
-      await saveAndClose(file, versionId, end);
+      await behindScreenCover(() => saveAndClose(file, versionId, end));
     } finally {
       release();
     }
     return;
   }
+}
+
+/** For the trace: each queue's entries by status (and paused or waiting for Resume), and the collection runs going. */
+function backgroundWork(automation: NonNullable<ReturnType<typeof documentAutomationFor>>): Record<string, unknown> {
+  const { queues, runs } = automation.automation.getState();
+  return {
+    queues: Object.fromEntries(Object.entries(queues).map(([id, queue]) => {
+      const counts: Record<string, number> = {};
+      for (const entry of queue.entries) counts[entry.status] = (counts[entry.status] ?? 0) + 1;
+      return [id, { ...counts, ...(queue.paused ? { paused: queue.pauseReason ?? true } : {}), ...(queue.awaitingResume ? { awaitingResume: true } : {}) }];
+    })),
+    runs: runs.filter((run) => run.status === 'running').length,
+  };
 }
 
 /** A job's tab, idle and not taken over: saved and closed, then back to the tab the user was on. */
