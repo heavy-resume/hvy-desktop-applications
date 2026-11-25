@@ -100,13 +100,36 @@ than retrying: once the user is idle, the job's document is opened as a
 tab (`selectDocumentTab`), its script runs there (`runUserScript`), and Galaxy
 goes back to the user's tab. Don't add a second way to run or save a document
 for it: a tab a job opened is saved and closed by switching to it, the usual
-Save, and closing it, while the user is idle. What the user chose (each job on,
+Save, and closing it, while the user is idle. Galaxy's own switches for a job (to its
+tab and back, and its Save and Close) happen under a still copy of the window
+(`behindScreenCover`, `src/ui/screenCover.ts`), so they aren't seen; clicks on
+it go nowhere until Galaxy is back. What the user chose (each job on,
 how often) is app settings by path (`scheduledDocuments`), not the document.
 While a job runs a document, its automation is unattended (`setUnattended`):
-the runs it starts let a page that needs someone go. A document is idle when
-`automation.activity()` has nothing outstanding (every plugin call through
-`operation()` is `tracked`, and callbacks waiting in `ScriptCalls`) and nothing
-happened for 5 minutes.
+the runs it starts let a page that needs someone go. A job's script runs once its document has loaded
+(the mount's `whenLoaded()`, its load scripts done), as a person would press
+its button. A job's document is done
+once it has no background work left (`automation.isBusy()`, see "No undo
+during background work"), not after a quiet spell: work waiting its turn, a
+backoff, the network, or a result its script hasn't had yet keeps its tab open.
+
+## Background tabs keep working
+
+A document's scripts only hear their callbacks (queue results, finished calls)
+while it is mounted: heavy-file-format's `destroy()` disposes them. So
+switching away from a tab whose document has background work doesn't destroy
+its mount: `releaseCurrentMount` (`src/main.ts`) takes the pane's element out
+of the page with the mount on it, and gives the pane a fresh `#hvyMount`.
+The mount is detached (heavy-file-format `detach()`: nothing drawn, its
+callbacks still running) and its element kept with it, so the listeners Galaxy's
+mount wrappers bound to that element stay with it. Switching back puts the
+element back and attaches the same mount (`attach(root)`, `restoreParkedMount`):
+nothing is loaded or run again. A kept mount goes once its work ends (then the
+tab is a session as any other) or its tab closes (`deleteDocumentSession`).
+Its changes, and its automation's, mark its tab unsaved
+(`markBackgroundDocumentChanged`), so switching back, the job's Save and Close
+too, keeps them instead of reading the file again. Don't destroy the pane's
+mount on a tab switch any other way.
 
 ## File picker
 
@@ -144,9 +167,11 @@ never directly. heavy-file-format stops a script that renders 10 times within
 2 s, and a run's callbacks share one step budget until 3 s pass with none
 running; background work answering every moment would run into either, and a
 callback stopped that way fails silently. `ScriptCalls` starts calls in order
-and no faster than those limits allow, and resolves false for a call the
-document closed before it ran (the queue then keeps that result for the next
-copy). Keep callbacks small too: write what arrived, and leave drawing to the
+and no faster than those limits allow, and resolves false for a call that
+never ran: the document closed first, or the callback's script run was
+replaced or disposed (heavy-file-format throws `HvyDisposedCallbackError`).
+The queue then keeps that result for the next handler, and gives it to one
+registered while it was out being handed over. Keep callbacks small too: write what arrived, and leave drawing to the
 document's own hook run.
 
 ## No undo during background work
