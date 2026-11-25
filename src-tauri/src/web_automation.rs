@@ -105,10 +105,11 @@ fn web_automation_window_label(label: &str) -> String {
 }
 
 /// A page in a window of its own, labelled `label` (its window, `web_automation_window_label`). The page is added to the
-/// window as a child webview, as the integration browser's is: on macOS, wry brings Galaxy to the front whenever it
-/// makes a window's own webview, even a hidden one, and workers are made for each job (a fresh window clears its
-/// history), so a scheduled job would take the front from whatever the user is doing elsewhere. A hidden worker never
-/// takes focus; showing one focuses it then.
+/// window as a child webview, as the integration browser's is. Workers are made for each job (a fresh window clears its
+/// history), so on macOS a hidden one must not bring Galaxy to the front from whatever the user is doing elsewhere: wry
+/// activates the app for a new webview only when it is visible and focused (wry 0.57.1 on; before that, every new
+/// webview did, child webviews too, and a scheduled job's worker took the front), so the worker is made unfocused while
+/// hidden. A hidden worker never takes focus; showing one focuses it then.
 fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser_store_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: Option<WebAutomationSignIn>, opened: Option<WebAutomationOpened>) -> AppResult<tauri::Webview> {
     let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
     let event_app = app.clone();

@@ -197,6 +197,9 @@ const openDocumentAutomationLookup = (rawDocument: object) => {
       markChanged(document);
       runWithStateRuntime(current, () => getRenderApp()());
     },
+    // Its scripts' callbacks write into it themselves (their database writes, their blocks): one in a background tab
+    // is unsaved from then, so going back to it (a scheduled job's Save and Close too) keeps what they wrote.
+    onScriptRan: () => markChanged(document),
     openInBrowser: openExternalUrl,
     scheduled: () => scheduledDocuments()[automationKey(documentPaths.get(document)) as FileKey] ?? null,
   });

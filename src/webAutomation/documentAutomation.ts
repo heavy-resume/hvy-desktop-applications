@@ -164,6 +164,8 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   onDatabaseChange?(stateRuntime: StateRuntime): void;
   /** A block's settings changed outside its reader (when a collection's start pages were last checked). */
   onSettingsChange?(stateRuntime: StateRuntime): void;
+  /** One of the document's scripts ran a callback (a queue's result, a finished call): it may have written to it. */
+  onScriptRan?(): void;
   /** The default browser, outside Galaxy (the app's): where an item a script asks to open there is opened. */
   openInBrowser?(url: string): Promise<void>;
   /** What the user chose for this document's scheduled jobs (app settings), for its scripts' schedule status. */
@@ -178,6 +180,7 @@ export function openDocumentAutomation(runtime: WebAutomationRuntime, options: {
   let unattended = false;
   const automation = createWebAutomation(runtime, {
     unattended: () => unattended,
+    scriptRan: () => options.onScriptRan?.(),
     documentPath: options.documentPath,
     isPluginAuthorized,
     webApiOrigin: (capabilityId) => {

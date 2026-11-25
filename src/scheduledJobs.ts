@@ -12,18 +12,15 @@ import { scheduledDocuments, scheduledJobKey, setScheduledJobRunner, updateSched
  * Scheduled jobs (docs/job-search/12-scheduled-jobs.md): a document's job is its script, triggered on a timer as if its
  * button were pressed, once. While Galaxy is open, once the user has been idle in it for the document's wait, the job's
  * document is opened as a tab (or switched to), its script runs there, and Galaxy goes back to the tab the user was on.
- * That is the job's turn: what the script started is the document's. The tab is left marked busy until nothing is left
- * of that and nothing has happened in it for a while; a tab the job opened is then saved and closed, unless the user
- * took it over.
+ * That is the job's turn: what the script started is the document's. The tab is left marked busy until no background
+ * work is left of that; a tab the job opened is then saved and closed, unless the user took it over.
  */
 
 /** How often what is due is looked at. */
 const TICK_MS = 60_000;
-/** How often a running job's document is looked at, for being idle or taken over. */
+/** How often a running job's document is looked at, for being done or taken over. */
 const WATCH_MS = 15_000;
-/** A job's document is idle once nothing has happened in it, and nothing it started is left, for this long. */
-const DOCUMENT_IDLE_MS = 5 * 60_000;
-/** A job's document that never goes idle is marked with a problem after this long, and left as it is. */
+/** A job's document whose background work never ends is marked with a problem after this long, and left as it is. */
 const NEVER_IDLE_MS = 4 * 60 * 60_000;
 
 /** When the user last typed, clicked, or scrolled in Galaxy. */
@@ -237,15 +234,15 @@ async function runJob(file: RuntimeDocument, jobId: string): Promise<void> {
   // A failure's one line (heavy-file-format's error, with the script's line), not its traceback.
   record(file, jobId, result.ok ? { at: startedAt, outcome: 'triggered' } : { at: startedAt, outcome: 'failed', message: result.error ?? 'Its script failed.' });
   await back();
-  void watchUntilIdle(file, versionId, job.name, startedAt, !wasOpen, automation);
+  void watchUntilDone(file, versionId, job.name, startedAt, !wasOpen, automation);
 }
 
 /**
- * Waits for the job's document to be idle (nothing left of what its script started, nothing happening in it for a
- * while), then lets the tab go: one the job opened, not taken over by the user, is saved and closed while the user is
- * idle. Only the tab says how that went; the job's turn was over once triggered.
+ * Waits for the job's document to be done (no background work left of what its script started), then lets the tab go:
+ * one the job opened, not taken over by the user, is saved and closed while the user is idle. Only the tab says how
+ * that went; the job's turn was over once triggered.
  */
-async function watchUntilIdle(
+async function watchUntilDone(
   file: RuntimeDocument,
   versionId: string,
   jobName: string,
@@ -268,9 +265,9 @@ async function watchUntilIdle(
       end();
       return;
     }
-    const { outstanding, lastActivityAt } = automation.automation.activity();
-    const idle = outstanding === 0 && Date.now() - lastActivityAt >= DOCUMENT_IDLE_MS;
-    if (!idle) {
+    // Done once it has no background work left (isBusy, from what its queues, runs, calls, and script calls are): work
+    // still waiting its turn, a backoff, or the network keeps it open.
+    if (automation.automation.isBusy()) {
       if (Date.now() - startedAt >= NEVER_IDLE_MS) {
         end('what it started didn’t finish');
         return;

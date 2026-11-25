@@ -85,6 +85,8 @@ export interface WebAutomationDocumentDeps {
   startPagesChecked(capabilityId: string, startPageIds: string[], at: string): void;
   /** No one is there for the document's runs now (a scheduled job runs it): a page that needs someone is let go. */
   unattended?(): boolean;
+  /** A call into the document's scripts ran: what it wrote (its database, its blocks) is a change to the document. */
+  scriptRan?(): void;
 }
 
 export function createWebAutomationRuntime(deps: WebAutomationRuntimeDeps) {
@@ -598,7 +600,10 @@ export function createWebAutomation(runtime: WebAutomationRuntime, document: Web
     callScript(run: () => void): Promise<boolean> {
       calling += 1;
       active();
-      return scriptCalls.call(run).finally(() => {
+      return scriptCalls.call(run).then((ran) => {
+        if (ran) deps.scriptRan?.();
+        return ran;
+      }).finally(() => {
         calling -= 1;
         active();
       });

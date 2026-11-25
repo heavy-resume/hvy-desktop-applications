@@ -65,6 +65,8 @@ export interface MockFlowOptions<State> {
     load?(document: VisualDocument, clock: VirtualClock, stateRuntime: StateRuntime): void;
     /** The document changed outside a script (collection wrote items or rows); a host that renders reruns its hooks. */
     changed?(): void;
+    /** One of the document's scripts ran a callback: what it wrote is a change to the document (the app marks it unsaved). */
+    scriptRan?(): void;
   };
 }
 
@@ -121,7 +123,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
     return runtime;
   }
   let stateRuntime = documentState(document);
-  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.() });
+  let opened: DocumentAutomation = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.(), onScriptRan: () => options.document?.scriptRan?.() });
   let automation: WebAutomation = opened.automation;
   loadDocument();
 
@@ -132,7 +134,7 @@ export function createMockFlow<State = MockAnalysisServiceState>(options: MockFl
       sink = createRecordSink(items, options.sink ?? DEFAULT_RECORD_SINK_CONFIG);
     }
     stateRuntime = documentState(document);
-    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.() });
+    opened = openDocumentAutomation(runtime, { documentPath: () => documentPath, document, stateRuntime, onDocumentChange: () => options.document?.changed?.(), onDatabaseChange: () => options.document?.changed?.(), onSettingsChange: () => options.document?.changed?.(), onScriptRan: () => options.document?.scriptRan?.() });
     automation = opened.automation;
     loadDocument();
   }

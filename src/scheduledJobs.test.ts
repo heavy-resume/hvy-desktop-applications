@@ -7,11 +7,16 @@ const mainMocks = vi.hoisted(() => ({
   closeCurrentDocument: vi.fn(async () => undefined),
   selectDocumentTab: vi.fn(),
 }));
-const automation = vi.hoisted(() => ({
-  setUnattended: vi.fn(),
-  pluginAuthorization: () => 'enabled',
-  automation: { activity: () => ({ outstanding: 0, lastActivityAt: 0 }) },
-}));
+const automation = vi.hoisted(() => {
+  const opened = {
+    setUnattended: vi.fn(),
+    pluginAuthorization: () => 'enabled',
+    // Whether the job's document has background work left (entryPoints.ts isBusy).
+    busy: false,
+    automation: { isBusy: () => opened.busy },
+  };
+  return opened;
+});
 const schedule = vi.hoisted(() => ({
   blockId: 'schedule',
   config: { jobs: [{ id: 'fetch', name: 'Fetch', script: 'fetch_due' }], paused: {}, scripts: { fetch_due: '' }, scriptLibraries: [] },
@@ -36,6 +41,9 @@ describe('scheduled jobs', () => {
     mainMocks.documentSessions.clear();
     state.document = null;
     state.scheduledJobRuns = {};
+    automation.busy = false;
+    mainMocks.saveCurrentDocument.mockClear();
+    mainMocks.closeCurrentDocument.mockClear();
     startScheduledJobs();
   });
 
@@ -58,6 +66,28 @@ describe('scheduled jobs', () => {
     updateRuntimeDocumentFile(file, { path: '/workspace/notes/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' });
     await vi.advanceTimersByTimeAsync(6 * 60_000);
 
+    expect(mainMocks.saveCurrentDocument).toHaveBeenCalled();
+    expect(mainMocks.closeCurrentDocument).toHaveBeenCalledWith({ discard: true });
+    expect(state.scheduledJobRuns).toEqual({});
+  });
+
+  it('keeps the tab it opened while its document has background work, however quiet, and saves and closes it once that ends', async () => {
+    const file = runtimeDocumentForFile({ path: '/workspace/finra.hvy', name: 'finra.hvy', extension: '.hvy' });
+    state.appSettings = { ...state.appSettings, scheduledDocuments: { [file.documentId]: { name: 'finra.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
+    mainMocks.selectDocumentTab.mockReset();
+    mainMocks.selectDocumentTab.mockImplementation(async () => {
+      state.document = { documentId: file.documentId, versionId: file.workingVersionId, source: file, dirty: false, mounted: { document: {} } } as never;
+    });
+
+    // Its download waits for a queue slot: nothing happens in it for an hour, but its work isn't done.
+    automation.busy = true;
+    await runScheduledJobNow(file.documentId, 'fetch');
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(mainMocks.saveCurrentDocument).not.toHaveBeenCalled();
+    expect(state.scheduledJobRuns[file.documentId]).toEqual({ job: 'Fetch' });
+
+    automation.busy = false;
+    await vi.advanceTimersByTimeAsync(15_000);
     expect(mainMocks.saveCurrentDocument).toHaveBeenCalled();
     expect(mainMocks.closeCurrentDocument).toHaveBeenCalledWith({ discard: true });
     expect(state.scheduledJobRuns).toEqual({});
