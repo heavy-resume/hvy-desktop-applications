@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, shell, clipboard, session, safeStorage } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, shell, clipboard, session, safeStorage, powerSaveBlocker } = require('electron');
 const { execFile, spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -736,6 +736,7 @@ async function handleCommand(command, args) {
     case 'delete_encrypted_folder_document': return deleteEncryptedFolderDocument(args.request);
     case 'delete_encrypted_folder_child': return deleteEncryptedFolderChild(args.request);
     case 'reveal_document_file': return revealDocumentFile(args.path);
+    case 'set_keep_awake': return setKeepAwake(args.on);
     case 'open_document_file': return openDocumentFile(args.path);
     case 'rename_document_file': return renameDocumentFile(args.path, args.name);
     case 'archive_document_file': return archiveDocumentFile(args.path);
@@ -2528,6 +2529,17 @@ function deleteEncryptedFolderChild(request) {
   manifest.updatedAt = new Date().toISOString();
   writeJson(manifestPath, manifest);
   return loadWorkspaceFromPath(workspacePath);
+}
+
+// Keeping the computer from idle sleep while a scheduled job is running (scheduledJobs.ts); the display may still sleep.
+let keepAwakeBlocker = null;
+
+function setKeepAwake(on) {
+  if (on && keepAwakeBlocker === null) keepAwakeBlocker = powerSaveBlocker.start('prevent-app-suspension');
+  else if (!on && keepAwakeBlocker !== null) {
+    powerSaveBlocker.stop(keepAwakeBlocker);
+    keepAwakeBlocker = null;
+  }
 }
 
 async function revealDocumentFile(filePath) {

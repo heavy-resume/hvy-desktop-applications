@@ -19,6 +19,8 @@ const automation = vi.hoisted(() => {
 });
 // The job's document's mount: its load scripts done once whenLoaded resolves.
 const mount = vi.hoisted(() => ({ whenLoaded: async () => undefined as void }));
+// Whether Galaxy is keeping the computer from idle sleep (backend.ts setKeepAwake).
+const keepAwake = vi.hoisted(() => vi.fn(async (_on: boolean) => undefined));
 const scripting = vi.hoisted(() => ({ runUserScript: vi.fn(async () => ({ ok: true })) }));
 const schedule = vi.hoisted(() => ({
   blockId: 'schedule',
@@ -27,7 +29,7 @@ const schedule = vi.hoisted(() => ({
 
 vi.mock('./main', () => mainMocks);
 vi.mock('./ui/screenCover', () => ({ behindScreenCover: (task: () => Promise<unknown>) => task() }));
-vi.mock('./backend', async (importOriginal) => ({ ...await importOriginal<typeof import('./backend')>(), saveAppSettings: vi.fn(async (settings: unknown) => settings) }));
+vi.mock('./backend', async (importOriginal) => ({ ...await importOriginal<typeof import('./backend')>(), saveAppSettings: vi.fn(async (settings: unknown) => settings), setKeepAwake: keepAwake }));
 vi.mock('./webAutomation/app', () => ({ documentAutomationFor: () => automation }));
 vi.mock('./webAutomation/documentBlocks', () => ({ readWebAutomationBlocks: () => ({ schedules: [schedule] }) }));
 vi.mock('../../heavy-file-format/src/plugins/scripting/wrapper', () => scripting);
@@ -51,6 +53,7 @@ describe('scheduled jobs', () => {
     mainMocks.saveCurrentDocument.mockClear();
     mainMocks.closeCurrentDocument.mockClear();
     startScheduledJobs();
+    keepAwake.mockClear();
   });
 
   afterEach(() => {
@@ -184,5 +187,47 @@ describe('scheduled jobs', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(state.appSettings.scheduledDocuments[file.documentId].lastResults.fetch?.outcome).toBe('triggered');
     expect(state.scheduledJobWaits).toEqual({});
+  });
+
+  it('saves and closes the tab it opened as soon as its work ends, while the user works in another tab, keeping the computer awake until then', async () => {
+    const file = runtimeDocumentForFile({ path: '/workspace/finra.hvy', name: 'finra.hvy', extension: '.hvy' });
+    // The user works in another tab.
+    const notes = runtimeDocumentForFile({ path: '/workspace/notes.hvy', name: 'notes.hvy', extension: '.hvy' });
+    state.appSettings = { ...state.appSettings, scheduledJobsAtOnce: 1, scheduledDocuments: { [file.documentId]: { name: 'finra.hvy', idleMinutes: 5, jobs: [], choices: {}, scheduledFrom: {}, lastResults: {} } } };
+    const open = (opened: typeof file) => {
+      state.document = { documentId: opened.documentId, versionId: opened.workingVersionId, source: opened, dirty: false, mounted: { document: {}, mount } } as never;
+    };
+    open(notes);
+    mainMocks.selectDocumentTab.mockReset();
+    mainMocks.selectDocumentTab.mockImplementation(async (path: string) => {
+      if (path === notes.workingVersionId) return open(notes);
+      // Opened as a tab, which stays open in the background.
+      mainMocks.documentSessions.set(file.workingVersionId, { documentId: file.documentId, versionId: file.workingVersionId, source: file });
+      open(file);
+    });
+    const input = vi.mocked(window.addEventListener).mock.calls.find(([type]) => type === 'keydown')![1] as () => void;
+
+    automation.busy = true;
+    await runScheduledJobNow(file.documentId, 'fetch');
+    expect(keepAwake.mock.calls).toEqual([[true]]);
+
+    input();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mainMocks.saveCurrentDocument).not.toHaveBeenCalled();
+
+    // Its work ends while the user is typing.
+    automation.busy = false;
+    input();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(mainMocks.saveCurrentDocument).toHaveBeenCalled();
+    expect(mainMocks.closeCurrentDocument).toHaveBeenCalledWith({ discard: true });
+    expect(state.scheduledJobRuns).toEqual({});
+    expect(keepAwake.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it('lets go of a keep-awake held from before the page reloaded when it starts', () => {
+    keepAwake.mockClear();
+    startScheduledJobs();
+    expect(keepAwake.mock.calls).toEqual([[false]]);
   });
 });

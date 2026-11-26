@@ -1,7 +1,8 @@
 import type { VisualDocument } from '../../heavy-file-format/src/types';
+import { setKeepAwake } from './backend';
 import { closeCurrentDocument, documentSessions, rerender, saveCurrentDocument, selectDocumentTab } from './main';
 import { runtimeDocumentById, type FileKey, type RuntimeDocument } from './runtimeDocuments';
-import { state } from './state';
+import { state, type ScheduledJobRun } from './state';
 import { trace } from './traceLog';
 import { behindScreenCover } from './ui/screenCover';
 import { documentAutomationFor } from './webAutomation/app';
@@ -16,6 +17,7 @@ import { scheduledDocuments, scheduledJobKey, setScheduledJobRunner, updateSched
  * document is opened as a tab (or switched to), its script runs there, and Galaxy goes back to the tab the user was on.
  * That is the job's turn: what the script started is the document's. The tab is left marked busy until no background
  * work is left of that; a tab the job opened is then saved and closed, unless the user took it over.
+ * The computer is kept from idle sleep from a job's start until its tab is let go (closed, or left with a problem).
  */
 
 /** How often what is due is looked at. */
@@ -64,6 +66,8 @@ let switching = false;
 /** Starts the timer, and listens for the user's input to know when they are idle. */
 export function startScheduledJobs(): void {
   setScheduledJobRunner(runNow);
+  // No job is running yet: a keep-awake held from before the page reloaded is let go.
+  void setKeepAwake(false);
   const input = () => {
     lastInputAt = Date.now();
   };
@@ -167,13 +171,20 @@ async function switchTo(path: string): Promise<void> {
   }
 }
 
-function setBusy(file: RuntimeDocument, busy: { job: string; problem?: string } | null): void {
+function setBusy(file: RuntimeDocument, busy: ScheduledJobRun | null): void {
+  const wasAwake = keepsAwake();
   if (busy) state.scheduledJobRuns = { ...state.scheduledJobRuns, [file.documentId]: busy };
   else {
     const { [file.documentId]: _done, ...rest } = state.scheduledJobRuns;
     state.scheduledJobRuns = rest;
   }
+  if (keepsAwake() !== wasAwake) void setKeepAwake(keepsAwake());
   rerender({ preserveMountedDocument: true });
+}
+
+/** A job running, until its tab is let go. */
+function keepsAwake(): boolean {
+  return Object.values(state.scheduledJobRuns).some((run) => !run.problem);
 }
 
 /**
@@ -297,10 +308,8 @@ async function watchUntilDone(
       end();
       return;
     }
-    // Saved and closed as the user would, with Save and Close, only while they aren't using Galaxy, and not while Galaxy
-    // is switching tabs for another job.
-    const scheduled = scheduledDocuments()[file.documentId];
-    if (!userIdleFor((scheduled?.idleMinutes ?? 5) * 60_000)) continue;
+    // Saved and closed as the user would, with Save and Close, as soon as it is done, not while Galaxy is switching tabs
+    // for another job.
     const release = tryLock();
     if (!release) continue;
     try {

@@ -213,6 +213,7 @@ include!("utils.rs");
 include!("web_automation.rs");
 include!("site_security.rs");
 include!("browser_chrome.rs");
+include!("keep_awake.rs");
 
 #[cfg(test)]
 mod tests {

@@ -1599,6 +1599,11 @@ function roundDebugDuration(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
+/** Keeps the computer from idle sleep (the display may still sleep), or lets it sleep again. */
+export function setKeepAwake(on: boolean): Promise<void> {
+  return invokeDesktop('set_keep_awake', { on });
+}
+
 export function openExternalUrl(url: string): Promise<void> {
   return invokeDesktop('open_external_url', { url });
 }

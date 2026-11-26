@@ -131,6 +131,7 @@ pub fn run() {
             create_encrypted_folder_child,
             update_encrypted_folder_manifest,
             reveal_document_file,
+            set_keep_awake,
             open_document_file,
             rename_document_file,
             archive_document_file,
