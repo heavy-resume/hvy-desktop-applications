@@ -75,13 +75,6 @@ export function normalizeIntegrationPageAllowedOrigins(pageUrl: string, value: s
   return [...new Set([pageOrigin, ...origins])];
 }
 
-export function integrationNavigationResumeUrl(
-  navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address',
-  currentUrl: string,
-  requestedUrl: string,
-): string {
-  return navigationKind === 'frame-or-main' ? currentUrl : requestedUrl;
-}
 
 export interface IntegrationRetrievalSourceDefinition {
   id: string;
@@ -124,6 +117,16 @@ export interface IntegrationCommandDefinition {
   scope: 'page' | 'record';
   inputs?: IntegrationCommandInputDefinition[];
   steps: IntegrationInteractionStepDefinition[];
+  /**
+   * A list page's way to its next page, from a site setup: its Next link or button ('next'), or its page numbers
+   * ('page-number': the step is one page number, and a run clicks the number of the page after the one it is on).
+   */
+  pagination?: 'next' | 'page-number';
+  /**
+   * A list page's way to get its list where it is read from, from a site setup (a search typed, a box ticked, a sort
+   * chosen): run on a start page whose anchors (the page's ready checks) don't hold yet.
+   */
+  prepare?: true;
 }
 
 export interface IntegrationCommandInputDefinition {
@@ -169,6 +172,11 @@ export interface IntegrationActionPatternDefinition {
   scope?: unknown;
   parents: unknown[];
   fields: IntegrationActionFieldDefinition[];
+  /**
+   * A list's rows: what opens a row's item, where it is in the row (an inspector snapshot), picked by clicking it. Its
+   * link is the item's; not a field, so it may be one too (the title).
+   */
+  opener?: unknown;
 }
 
 export interface IntegrationDefinition {
@@ -178,6 +186,8 @@ export interface IntegrationDefinition {
   editable: boolean;
   pages: IntegrationPageDefinition[];
   actions: IntegrationActionDefinition[];
+  /** In a site setup for a document's collection: kept in memory, saved into the document on Done, never into the registry. */
+  siteSetup?: true;
 }
 
 export interface IntegrationProfileDefinition {
@@ -241,27 +251,51 @@ export function loadIntegrationRegistry(): IntegrationRegistry {
   return { version: 1, integrations: custom, profiles };
 }
 
+let registrySaved: ((registry: IntegrationRegistry) => void) | null = null;
+
+/** Called after every registry save, with the pages of a site setup in progress included (the setup checks them). */
+export function onIntegrationRegistrySaved(listener: ((registry: IntegrationRegistry) => void) | null): void {
+  registrySaved = listener;
+}
+
 export function saveIntegrationRegistry(registry: IntegrationRegistry): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(registry));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...registry, integrations: registry.integrations.filter((integration) => !integration.siteSetup) }));
+  registrySaved?.(registry);
+}
+
+/** A field picked as a range: its example is where it starts, with where it ends and whether each boundary is part of it. */
+export interface InspectionRange {
+  includeStart: boolean;
+  includeEnd: boolean;
+  end: unknown;
+  /** How the range read when it was picked, for the record type builder; not saved. */
+  summary?: string;
 }
 
 export function matcherSnapshot(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
   const selected = (value as { selected?: { shape?: unknown; relativePath?: unknown; pagePath?: unknown } }).selected;
+  const range = (value as { range?: InspectionRange }).range;
+  const { textPart, ownText } = value as { textPart?: { index?: unknown; count?: unknown }; ownText?: unknown };
   return {
     selected: {
       shape: selected?.shape,
       relativePath: selected?.relativePath ?? null,
       ...(selected?.pagePath ? { pagePath: selected.pagePath } : {}),
     },
+    ...(range ? { range: { includeStart: range.includeStart === true, includeEnd: range.includeEnd === true, end: matcherSnapshot(range.end) } } : {}),
+    // Which of the element's text the field reads: one part of it (-1 the last), or its own text alone.
+    ...(typeof textPart?.index === 'number' ? { textPart: { index: textPart.index, ...(typeof textPart.count === 'number' ? { count: textPart.count } : {}) } } : {}),
+    ...(ownText === true ? { ownText: true } : {}),
   };
 }
 
-export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; scope?: unknown; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
+export function actionPatternPayload(action: IntegrationActionDefinition): { minimumConfidence: number; scope?: unknown; opener?: unknown; parents: unknown[]; targets: Array<{ label: string; cardinality: 'single' | 'list'; optional: boolean; snapshot: unknown; snapshots: unknown[]; negativeSnapshots: unknown[]; exampleSnapshots: Array<unknown | null> }> } | null {
   if (!action.pattern) return null;
   return {
     minimumConfidence: action.pattern.minimumConfidence ?? 0.85,
     ...(action.pattern.scope ? { scope: action.pattern.scope } : {}),
+    ...(action.pattern.opener ? { opener: action.pattern.opener } : {}),
     parents: action.pattern.parents,
     targets: action.pattern.fields.map((field) => ({ label: field.label, cardinality: field.cardinality, optional: field.optional ?? false, snapshot: field.snapshot, snapshots: field.snapshots?.length ? field.snapshots : [field.snapshot], negativeSnapshots: field.negativeSnapshots ?? [], exampleSnapshots: field.exampleSnapshots ?? [] })),
   };
@@ -348,6 +382,11 @@ export function matchingInspectionPrivacyRules(value: unknown, path: string, act
 
 export function selectedInspectionContent(value: unknown): string {
   if (!value || typeof value !== 'object') return '';
+  const range = (value as { range?: InspectionRange }).range;
+  // A part of the element's text, or its own text, as it was picked (shown only while it is being built: not saved).
+  const { textPreview } = value as { textPreview?: unknown };
+  if (range) return `Range · ${range.summary ?? 'Saved start and end'}`;
+  if (typeof textPreview === 'string' && textPreview.trim()) return textPreview.trim();
   const selected = (value as { selected?: unknown }).selected;
   if (!selected || typeof selected !== 'object') return '';
   const item = selected as Record<string, unknown>;
@@ -359,4 +398,22 @@ export function selectedInspectionContent(value: unknown): string {
     return String((image as Record<string, unknown>).alt);
   }
   return '';
+}
+
+const CONTROL_KINDS: Record<string, string> = {
+  input: 'input', textarea: 'input', textbox: 'input', searchbox: 'input', combobox: 'input',
+  select: 'dropdown', listbox: 'dropdown',
+  button: 'button', a: 'link', link: 'link',
+  checkbox: 'checkbox', radio: 'option', option: 'option', tab: 'tab', menuitem: 'menu item',
+};
+
+/** A recorded control's name: its text, or else what kind of control it is ("input", "button"). */
+export function inspectedControlName(value: unknown): string {
+  const content = selectedInspectionContent(value);
+  if (content) return content;
+  // A saved step keeps only the element's shape, which has its tag and role.
+  const shape = (value as { selected?: { shape?: { tag?: unknown; role?: unknown } } } | null)?.selected?.shape;
+  const role = typeof shape?.role === 'string' ? CONTROL_KINDS[shape.role] : undefined;
+  const tag = typeof shape?.tag === 'string' ? CONTROL_KINDS[shape.tag] : undefined;
+  return role ?? tag ?? 'control';
 }

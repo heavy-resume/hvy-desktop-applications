@@ -3,7 +3,9 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  /* Tabs, toolbar, the plugin approval bar (when shown), the error slot, then the document stage, which takes the rest
+     (pinned to the last row below, so a missing bar leaves an empty row rather than shifting the stage up a row). */
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   background: var(--hvy-bg, #fbfaf7);
 }
 
@@ -104,6 +106,49 @@
 .document-tab-close:hover {
   background: color-mix(in srgb, var(--hvy-text, #17211f) 10%, transparent);
   color: var(--hvy-text, #17211f);
+}
+
+.document-recent-tabs {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  min-width: 0;
+  height: 34px;
+  overflow: hidden;
+}
+
+.document-recent-tab {
+  display: inline-flex;
+  align-items: center;
+  min-width: 120px;
+  max-width: 180px;
+  height: 34px;
+  margin: 0 2px;
+  border: 1px dashed color-mix(in srgb, var(--hvy-border-translucent, var(--hvy-border, #c2cbc6)) 70%, transparent);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: transparent;
+  color: var(--hvy-text-muted, #66726e);
+  opacity: 0.7;
+  padding: 0 5px 0 0;
+}
+
+.document-recent-tab:hover {
+  opacity: 1;
+}
+
+.document-recent-tab-main {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-style: italic;
+  padding: 0 6px 0 10px;
 }
 
 .tab-stack-popover {
@@ -390,17 +435,59 @@
 }
 
 .error-slot.has-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   border-bottom: 1px solid var(--hvy-danger, #e6c0ba);
   background: color-mix(in srgb, var(--hvy-danger, #8c291d) 12%, var(--hvy-surface, #ffffff));
   color: var(--hvy-danger, #8c291d);
   padding: 10px 14px;
 }
 
+.error-slot-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-slot-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -3px -6px -3px 0;
+  font-size: 18px;
+  color: inherit;
+}
+
 .document-stage {
+  grid-row: 5;
   position: relative;
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+.app-toast {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 20;
+  max-width: calc(100% - 32px);
+  transform: translate(-50%, -4px);
+  border: 1px solid var(--hvy-border, #d7dedb);
+  border-radius: 6px;
+  background: var(--hvy-surface, #ffffff);
+  color: var(--hvy-text, #17211f);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.14);
+  padding: 8px 14px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.app-toast.is-shown {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 .document-host {
@@ -442,4 +529,89 @@
 .document-host .viewer-sidebar-tab,
 .document-host .editor-sidebar-tab {
   color: var(--hvy-accent-1-text, #ffffff);
+}
+
+.plugin-approval-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--hvy-warning, #c79200);
+  border-radius: 8px;
+  background: var(--hvy-surface-alt, #f7f3e8);
+  color: var(--hvy-text, #1a2530);
+  font-size: 13px;
+}
+
+/* A tab whose document has background work waiting for the user (backgroundActivity.ts). */
+.document-tab-needs-you {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--hvy-warning, #d47a00);
+  color: var(--hvy-warning-on, #ffffff);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* A tab whose document needs the user: the mark sits after the name, which shortens to fit. */
+.document-tab.needs-you .document-tab-main {
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+}
+
+/* A tab a scheduled job is running in (scheduledJobs.ts): a line pulsing along its bottom until its document is idle. */
+.document-tab.scheduled-job-busy {
+  box-shadow: inset 0 -2px 0 var(--hvy-accent, #2f6968);
+  animation: scheduled-job-busy 1.6s ease-in-out infinite;
+}
+
+/* A scheduled job's problem (it failed to save, or never finished): a still line in the warning color. */
+.document-tab.scheduled-job-problem {
+  box-shadow: inset 0 -2px 0 var(--hvy-warning, #d47a00);
+}
+
+@keyframes scheduled-job-busy {
+  50% { box-shadow: inset 0 -2px 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-tab.scheduled-job-busy {
+    animation: none;
+  }
+}
+
+/* The toolbar's Background activity indicator (render-background-activity.ts): before the save state, while work runs. */
+.background-activity-indicator {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  max-width: 120px;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  padding: 4px 6px;
+  color: var(--hvy-text-muted, #5f6a66);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.background-activity-indicator-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--hvy-accent, #326b60);
+}
+
+.background-activity-indicator:hover {
+  border-color: var(--hvy-border-input, #b8c2bd);
+  background: var(--hvy-surface-alt, #f7f8f4);
 }

@@ -105,14 +105,19 @@ export function bindEscapeEvents(root: HTMLElement, handlers: UiHandlers, state:
       handlers.cancelRenameFile();
       return;
     }
-    if (root.querySelector('form[data-form="rename-encrypted-folder"]')) {
+    if (root.querySelector('form[data-form="rename-folder"]')) {
       event.preventDefault();
-      handlers.cancelRenameEncryptedFolder();
+      handlers.cancelRenameFolder();
       return;
     }
     if (root.querySelector('form[data-form="new-folder"]')) {
       event.preventDefault();
       handlers.cancelNewFolder();
+      return;
+    }
+    if (root.querySelector('.archive-file-dialog')) {
+      event.preventDefault();
+      handlers.cancelArchiveFile();
       return;
     }
     if (root.querySelector('.delete-file-dialog')) {

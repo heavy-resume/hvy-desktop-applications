@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { DocumentKeyMetadata } from './backend';
 
 vi.hoisted(() => {
@@ -31,6 +32,7 @@ const hvyMocks = vi.hoisted(() => ({
 }));
 
 const backendMocks = vi.hoisted(() => ({
+  archiveDocumentFile: vi.fn(async () => ({ path: '/workspace' })),
   listDocumentKeyMetadata: vi.fn(async (): Promise<DocumentKeyMetadata[]> => []),
   renameDocumentFile: vi.fn(),
   saveDocumentTemplate: vi.fn(async () => ({ path: '/workspace/templates/Resume.thvy', name: 'Resume.thvy', extension: '.thvy' })),
@@ -66,10 +68,16 @@ const mainMocks = vi.hoisted(() => ({
     state.document.isNew = false;
   }),
   captureMountScrollRatio: vi.fn(() => ({ top: 0, left: 0, topPosition: 0, leftPosition: 0 })),
-  applyArchivedFileRelocations: vi.fn(),
+  relocateFiles: vi.fn(),
   copyOpenWorkspaceFileToWorkspace: vi.fn(),
   backupDocumentKey: vi.fn((path: string, name: string) => `${path}:${name}`),
   clearRecoveryDraftsForDocument: vi.fn(async () => undefined),
+  clearHomepageDocumentPath: vi.fn(async () => undefined),
+  closeCurrentDocument: vi.fn(async () => {
+    state.document = null;
+  }),
+  deleteBackupTracking: vi.fn(),
+  removeDocumentTabPath: vi.fn(),
   documentTitle: vi.fn((name: string) => name.replace(/\.[^.]+$/, '')),
   documentSessions: new Map(),
   ensureCurrentDocumentMounted: vi.fn(async () => undefined),
@@ -95,7 +103,7 @@ const mainMocks = vi.hoisted(() => ({
     if (state.document) state.document.dirty = dirty;
   }),
   runBusy: vi.fn(async (_label: string, task: () => Promise<void>) => task()),
-  updateHomepageDocumentPath: vi.fn(),
+  saveSettingsForMovedFile: vi.fn(),
   updateOpenDocumentFile: vi.fn((previousPath: string, file: { path: string; name: string; extension: '.hvy' }) => {
     if (state.document?.source.path !== previousPath) return;
     state.document.source.path = file.path;
@@ -139,11 +147,13 @@ vi.mock('./backend', async (importOriginal) => ({
   saveDocumentTemplate: backendMocks.saveDocumentTemplate,
   saveDocumentToWorkspace: backendMocks.saveDocumentToWorkspace,
   saveDocumentAsDialog: backendMocks.saveDocumentAsDialog,
+  archiveDocumentFile: backendMocks.archiveDocumentFile,
 }));
 
 vi.mock('./main', () => mainMocks);
 
 import { createDocumentHandlers } from './mainHandlersDocument';
+import { resetRuntimeDocuments, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile } from './runtimeDocuments';
 import { state } from './state';
 
 function testOpenDocument(overrides: Partial<NonNullable<typeof state.document>> = {}): NonNullable<typeof state.document> {
@@ -151,7 +161,7 @@ function testOpenDocument(overrides: Partial<NonNullable<typeof state.document>>
     documentId: 'document:example',
     versionId: 'version:example',
     source: {
-      documentId: 'document:example',
+      documentId: 'document:example' as FileKey,
       workingVersionId: 'version:example',
       path: '/workspace/example.hvy',
       name: 'example.hvy',
@@ -178,6 +188,9 @@ describe('document handlers', () => {
     state.pendingWorkspaceFileOperation = null;
     state.workspaceFileOperationPromptOpen = false;
     state.workspaceClipboard = null;
+    // A loaded workspace gives its files references; these tests' workspace holds example.hvy.
+    resetRuntimeDocuments();
+    runtimeDocumentForFile({ path: '/workspace/example.hvy', name: 'example.hvy', extension: '.hvy' });
     state.documentEncryptionAction = null;
     state.documentEncryptionDialogOpen = false;
     state.documentEncryptionKeyId = null;
@@ -380,8 +393,7 @@ describe('document handlers', () => {
 
     await vi.waitFor(() => expect(state.workspaceClipboard).toEqual({
       mode: 'copy',
-      path: '/workspace/example.hvy',
-      name: 'example.hvy',
+      file: runtimeDocumentAtPath('/workspace/example.hvy'),
     }));
     expect(state.pendingWorkspaceFileOperation).toBeNull();
     expect(state.workspaceFileOperationPromptOpen).toBe(false);
@@ -391,8 +403,7 @@ describe('document handlers', () => {
     state.document = testOpenDocument({ dirty: false });
     state.workspaceClipboard = {
       mode: 'copy',
-      path: '/workspace/example.hvy',
-      name: 'example.hvy',
+      file: runtimeDocumentForFile({ path: '/workspace/example.hvy', name: 'example.hvy', extension: '.hvy' }),
     };
     const handlers = createDocumentHandlers(vi.fn());
 
@@ -410,17 +421,69 @@ describe('document handlers', () => {
     ));
   });
 
+  it('pastes a copied file from where it is now when it was renamed after copying', async () => {
+    const file = runtimeDocumentAtPath('/workspace/example.hvy')!;
+    state.workspaceClipboard = { mode: 'copy', file };
+    updateRuntimeDocumentFile(file, { path: '/workspace/notes/renamed.hvy', name: 'renamed.hvy', extension: '.hvy' });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.pasteWorkspaceClipboard?.('/workspace');
+
+    await vi.waitFor(() => expect(mainMocks.copyOpenWorkspaceFileToWorkspace).toHaveBeenCalledWith('/workspace/notes/renamed.hvy', '/workspace', ''));
+  });
+
   it('preserves the mounted document when archiving a workspace file', () => {
     mainMocks.runBusy.mockImplementationOnce(async () => undefined);
     const handlers = createDocumentHandlers(vi.fn());
 
-    handlers.archiveFile?.('/workspace/other.hvy', 'other.hvy');
+    handlers.confirmArchiveFile?.('/workspace/other.hvy', 'other.hvy');
+    handlers.archiveFile?.();
 
     expect(mainMocks.runBusy).toHaveBeenCalledWith(
       'Archiving file...',
       expect.any(Function),
       { preserveMountedDocument: true },
     );
+  });
+
+  it('asks before archiving and notes unsaved changes in the open document', () => {
+    state.document = testOpenDocument({ dirty: true });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmArchiveFile?.('/workspace/example.hvy', 'example.hvy');
+
+    expect(state.archiveFilePath).toBe('/workspace/example.hvy');
+    expect(state.archiveFileName).toBe('example.hvy');
+    expect(state.archiveFileUnsaved).toBe(true);
+    expect(backendMocks.archiveDocumentFile).not.toHaveBeenCalled();
+
+    handlers.cancelArchiveFile?.();
+
+    expect(state.archiveFilePath).toBeNull();
+    expect(state.archiveFileUnsaved).toBe(false);
+    expect(backendMocks.archiveDocumentFile).not.toHaveBeenCalled();
+  });
+
+  it('closes the open document and its tabs after archiving it', async () => {
+    state.document = testOpenDocument({ dirty: true });
+    mainMocks.documentSessions.set('version:other-tab', {
+      versionId: 'version:other-tab',
+      source: { path: '/workspace/example.hvy', name: 'example.hvy' },
+      dirty: false,
+    });
+    mainMocks.loadWorkspace.mockResolvedValueOnce({ path: '/workspace' });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.confirmArchiveFile?.('/workspace/example.hvy', 'example.hvy');
+    handlers.archiveFile?.();
+
+    await vi.waitFor(() => expect(state.status).toBe('Archived example.hvy'));
+    expect(backendMocks.archiveDocumentFile).toHaveBeenCalledWith('/workspace/example.hvy');
+    expect(mainMocks.closeCurrentDocument).toHaveBeenCalledWith({ discard: true });
+    expect(state.document).toBeNull();
+    expect(mainMocks.documentSessions.has('version:other-tab')).toBe(false);
+    expect(mainMocks.removeDocumentTabPath).toHaveBeenCalledWith('version:other-tab');
+    expect(state.archiveFilePath).toBeNull();
   });
 
   it('persists plaintext immediately after removing document encryption', async () => {
@@ -584,19 +647,15 @@ describe('document handlers', () => {
     handlers.renameFile?.('/workspace/example.hvy', 'example.hvy');
     handlers.submitRenameFile?.('Renamed');
 
-    await vi.waitFor(() => expect(mainMocks.updateOpenDocumentFile).toHaveBeenCalledWith(
-      '/workspace/example.hvy',
-      expect.objectContaining({ path: '/workspace/Renamed.hvy' }),
-    ));
-    expect(mainMocks.relocateRecoveryDraftsForDocument).toHaveBeenCalledWith(
-      '/workspace/example.hvy',
-      'example.hvy',
-      expect.objectContaining({ path: '/workspace/Renamed.hvy', name: 'Renamed.hvy' }),
-    );
+    await vi.waitFor(() => expect(mainMocks.relocateFiles).toHaveBeenCalledWith([{
+      previousPath: '/workspace/example.hvy',
+      previousName: 'example.hvy',
+      path: '/workspace/Renamed.hvy',
+      name: 'Renamed.hvy',
+      extension: '.hvy',
+    }]));
     expect(state.document.documentId).toBe('document:example');
     expect(state.document.versionId).toBe('version:example');
-    expect(state.document.source.path).toBe('/workspace/Renamed.hvy');
-    expect(state.document.source.name).toBe('Renamed.hvy');
     expect(state.document.dirty).toBe(true);
     expect(mainMocks.preserveCurrentDocumentSession).toHaveBeenCalledOnce();
     expect(mainMocks.runBusy).toHaveBeenCalledWith(
@@ -605,7 +664,34 @@ describe('document handlers', () => {
       { preserveMountedDocument: true },
     );
     expect(mainMocks.preserveCurrentDocumentSession.mock.invocationCallOrder[0]).toBeLessThan(
-      mainMocks.updateOpenDocumentFile.mock.invocationCallOrder[0],
+      mainMocks.relocateFiles.mock.invocationCallOrder[0],
     );
+  });
+
+  it('moves an archived file aside before adopting the renamed path', async () => {
+    state.document = testOpenDocument({ dirty: false });
+    const relocation = {
+      previousPath: '/workspace/Renamed.hvy',
+      path: '/workspace/Renamed 2.hvy',
+      name: 'Renamed 2.hvy',
+      extension: '.hvy' as const,
+    };
+    backendMocks.renameDocumentFile.mockResolvedValueOnce({
+      path: '/workspace/Renamed.hvy',
+      name: 'Renamed.hvy',
+      extension: '.hvy',
+      bytes: [],
+      relocatedArchivedFiles: [relocation],
+    });
+    const handlers = createDocumentHandlers(vi.fn());
+
+    handlers.renameFile?.('/workspace/example.hvy', 'example.hvy');
+    handlers.submitRenameFile?.('Renamed');
+
+    // The archived file moves aside first, so the renamed file's history and drafts don't land on its records.
+    await vi.waitFor(() => expect(mainMocks.relocateFiles).toHaveBeenCalledWith([
+      relocation,
+      expect.objectContaining({ previousPath: '/workspace/example.hvy', path: '/workspace/Renamed.hvy' }),
+    ]));
   });
 });

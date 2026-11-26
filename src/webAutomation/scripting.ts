@@ -1,0 +1,483 @@
+import { queueWebCapabilityScriptOperation, type WebCapabilityScriptCallback } from '../plugins/webCapabilityScripting';
+import type { CollectedRecord } from './records';
+import type { CollectionDefinition, ExtractItem, RecordConsumer } from './collection';
+import type { WebAutomation } from './entryPoints';
+import type { QueueResult } from './queue';
+import { WebAutomationError } from './errors';
+import { servedDocumentSessionKey, type WebApiCapability } from './webApi';
+import type { ScriptingSession } from '../../../heavy-file-format/src/plugins/scripting/scripting-session';
+import { matchRows, rankRows, type EmbeddingSource, type FetchedQuery, type UseDatabase } from './similarity';
+import { exportDocumentSourceMarkdown } from '../../../heavy-file-format/src/document-source-markdown';
+import type { ScheduleBlockConfig } from './configs';
+import { nextTurnAt, type ScheduledDocument } from './scheduleSettings';
+
+/** The subset of HvyPluginScriptingContext these methods use. */
+export interface ScriptingContext {
+  rawDocument: object;
+  /** The open document's session, its scripts' `session`. */
+  session: ScriptingSession;
+}
+
+export type ScriptingMethod = (args: Record<string, unknown>, ctx: ScriptingContext) => unknown;
+
+/** Finds the open document's automation and the block snapshots it contains. */
+export interface DocumentAutomationLookup {
+  automation: WebAutomation;
+  webApi(capabilityId: string): WebApiCapability | null;
+  collection(capabilityId: string): CollectionDefinition | null;
+  /** The record sink a collection block's output is wired to, if it has one. */
+  sink(capabilityId: string): RecordConsumer | null;
+  /** Uses the document's database, as its scripts' doc.db does: a fresh copy each use, one use at a time. */
+  database: UseDatabase;
+  /** The document's database changed outside a script: its views redraw, and its document hooks run. */
+  databaseChanged(): void;
+  /**
+   * Opens an item of a collection in the default browser, outside Galaxy (as you see it there, signed in or not as you
+   * are): only an item the collection's output holds, so a script opens no other address.
+   */
+  openInBrowser(capabilityId: string, url: string, key?: string): Promise<void>;
+  /** The document's path, where Galaxy keeps what the user chose for it (its scheduled jobs); empty before it is saved. */
+  documentPath(): string;
+  /** The document's schedule block (its jobs, and the pauses its scripts made), if it has one. */
+  schedule(): ScheduleBlockConfig | null;
+  /** Writes the schedule block's pauses: the document draws again, and is unsaved until it is saved. */
+  setSchedulePauses(paused: Record<string, string>): void;
+  /** What the user chose for the document's jobs (app settings): each on or off, its last turn; null if never set up. */
+  scheduled(): ScheduledDocument | null;
+}
+
+export type DocumentAutomationResolver = (ctx: Pick<ScriptingContext, 'rawDocument'>) => DocumentAutomationLookup;
+
+function scriptFunction(value: unknown): WebCapabilityScriptCallback | null {
+  return typeof value === 'function' ? value as WebCapabilityScriptCallback : null;
+}
+
+/**
+ * A callback a script passed, called through its document's automation: in turn with the document's other calls into
+ * its scripts, as heavy-file-format's limits allow (ScriptCalls). Resolves whether it ran.
+ */
+function callback(lookup: DocumentAutomationLookup, value: unknown): ((result: Record<string, unknown>) => Promise<boolean>) | null {
+  const run = scriptFunction(value);
+  return run ? (result) => lookup.automation.callScript(() => {
+    run(result);
+  }) : null;
+}
+
+/**
+ * Sandboxed scripts may only call synchronous methods: with `on_complete`
+ * the call returns `{ jobId, status: 'queued' }` and reports later. Power
+ * scripts may omit the callbacks and await the promise.
+ */
+function operation(lookup: DocumentAutomationLookup, args: Record<string, unknown>, work: () => Promise<unknown>): unknown {
+  // Counted as the document's work until it ends: a scheduled job's document is idle only once nothing is left of it.
+  const onComplete = callback(lookup, args.on_complete);
+  if (!onComplete) return lookup.automation.tracked(work);
+  // With callbacks, until one is handed the outcome (its call into the script is counted from then): no moment between
+  // the call ending and its script hearing of it looks like the document's work is done.
+  let handedOver = () => undefined as void;
+  void lookup.automation.tracked(() => new Promise<void>((resolve) => {
+    handedOver = resolve;
+  }));
+  const thenHandedOver = (handler: (result: Record<string, unknown>) => Promise<boolean>) => (result: Record<string, unknown>) => {
+    const ran = handler(result);
+    handedOver();
+    return ran;
+  };
+  const onError = callback(lookup, args.on_error);
+  // A call refused before it starts (no profile chosen) is its error callback's, as one that fails later.
+  return queueWebCapabilityScriptOperation(async () => work(), { onComplete: thenHandedOver(onComplete), onError: onError ? thenHandedOver(onError) : null });
+}
+
+function input(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function required<T>(value: T | null, message: string): T {
+  if (!value) throw new WebAutomationError('invalid_request', message);
+  return value;
+}
+
+export function webApiScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  const capability = (lookup: DocumentAutomationLookup, args: Record<string, unknown>) => required(
+    lookup.webApi(String(args.capabilityId ?? '')),
+    `This document has no web API block "${String(args.capabilityId ?? '')}".`,
+  );
+  return {
+    session: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(lookup, args, () => lookup.automation.probeSession(capability(lookup, args)));
+    },
+    call: (args, ctx) => {
+      const lookup = resolve(ctx);
+      // A queue passes its entry's stable idempotency key, so a retried call never creates a second result.
+      const idempotencyKey = typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined;
+      // A document its document-text inputs send is read from the copy the document's session keeps, if it keeps one.
+      // Offline, or the site couldn't be reached: the call waits and is made again, unless `wait` is false (an
+      // unreachable error at once; a queue's calls, so the queue waits instead).
+      const wait = args.wait !== false;
+      return operation(lookup, args, () => lookup.automation.callEndpoint(capability(lookup, args), String(args.endpointId ?? ''), input(args.input), { idempotencyKey, session: ctx.session.state, wait }));
+    },
+    /**
+     * Forgets the copy the document's session keeps of a served document (`endpointId` serving it, and `documentId`): the next call that
+     * sends it fetches it again. For when the service says the copy sent is stale (a resume saved since). True when a
+     * copy was kept; false when none was, so the one just sent was fetched fresh.
+     */
+    forget_document: (args, ctx) => {
+      const key = servedDocumentSessionKey(capability(resolve(ctx), args).capabilityId, String(args.endpointId ?? ''), String(args.documentId ?? ''));
+      if (!ctx.session.state.has(key)) return false;
+      ctx.session.state.remove(key);
+      return true;
+    },
+    /**
+     * Calls `handler` with `{ status }` whenever the account this
+     * document uses there signs in or out. Registered by a form's initial
+     * script; the same `key` replaces an earlier handler.
+     */
+    on_session: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const handler = required(callback(lookup, args.handler), 'on_session needs a handler function.');
+      lookup.automation.onSessionChange(capability(lookup, args), String(args.key ?? 'default'), (state) => handler({ status: state.status }));
+      return null;
+    },
+    /** Opens the site's login window. Scripts cannot complete a sign-in. */
+    sign_in: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(lookup, args, () => lookup.automation.beginSignIn(capability(lookup, args)));
+    },
+  };
+}
+
+/**
+ * A script consumes records through `on_record`, and may pass `known_keys`
+ * so the run skips pages it already has. Without `on_record`, records go to
+ * the block's output sink.
+ */
+function consumer(lookup: DocumentAutomationLookup, args: Record<string, unknown>): RecordConsumer {
+  const onRecord = callback(lookup, args.on_record);
+  if (!onRecord) {
+    return required(lookup.sink(String(args.capabilityId ?? '')), 'Pass on_record, or give the collection block an output.');
+  }
+  const known = new Set(Array.isArray(args.known_keys) ? args.known_keys.map(String) : []);
+  return {
+    onRecord: (record: CollectedRecord) => {
+      onRecord(record as unknown as Record<string, unknown>);
+    },
+    isKnown: (key) => known.has(key),
+  };
+}
+
+export function collectionScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  const collection = (lookup: DocumentAutomationLookup, args: Record<string, unknown>) => required(
+    lookup.collection(String(args.capabilityId ?? '')),
+    `This document has no collection block "${String(args.capabilityId ?? '')}".`,
+  );
+  return {
+    collect: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const base = collection(lookup, args);
+      // Scripts choose among the block's start pages by address; new sites go through the block and its review. Without a
+      // choice, every start page not disabled runs. `due: true` runs only those of them due, as the block's
+      // Fetch due does.
+      const approved = base.startPages.map((page) => page.url);
+      const startUrls = Array.isArray(args.startUrls) ? args.startUrls.map(String) : base.startPages.filter((page) => !page.disabled).map((page) => page.url);
+      const unapproved = startUrls.filter((url) => !approved.includes(url));
+      if (unapproved.length) throw new WebAutomationError('invalid_request', `Not an approved start URL: ${unapproved.join(', ')}.`);
+      // A script may only lower the limits: the defaults, and each page's own.
+      const lower = (limit: 'maxPages' | 'maxItems', value: number) => (typeof args[limit] === 'number' ? Math.min(args[limit], value) : value);
+      const definition: CollectionDefinition = {
+        ...base,
+        maxPages: lower('maxPages', base.maxPages),
+        maxItems: lower('maxItems', base.maxItems),
+        startPages: base.startPages.map((page) => ({
+          ...page,
+          ...(page.maxPages !== undefined ? { maxPages: lower('maxPages', page.maxPages) } : {}),
+          ...(page.maxItems !== undefined ? { maxItems: lower('maxItems', page.maxItems) } : {}),
+        })),
+      };
+      return operation(lookup, args, () => lookup.automation.startCollection(definition, consumer(lookup, args), startUrls, { due: args.due === true }).done);
+    },
+    // One item (`url`), or several (`items`, each { url, values, key }: what its list showed, as its record has it, kept;
+    // and its record's key, for an item whose address doesn't make it, one opened without a link).
+    extract: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const keyOf = (value: unknown) => (typeof value === 'string' && value ? { key: value } : {});
+      const items: ExtractItem[] = Array.isArray(args.items)
+        ? args.items.map((item: { url?: unknown; values?: unknown; key?: unknown }) => ({
+          url: String(item?.url ?? ''),
+          ...(item?.values && typeof item.values === 'object' ? { values: item.values as Record<string, unknown> } : {}),
+          ...keyOf(item?.key),
+        }))
+        : [{ url: String(args.url ?? ''), ...keyOf(args.key) }];
+      return operation(lookup, args, () => lookup.automation.extractItems(collection(lookup, args), items, consumer(lookup, args)).done);
+    },
+    // The items the collection's runs are reading on their own pages now, by key: { waiting: [...], reading: [...] }.
+    in_progress: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return lookup.automation.itemsInProgress(collection(lookup, args).capabilityId);
+    },
+    stop: (args, ctx) => {
+      resolve(ctx).automation.stopCollection(String(args.runId ?? ''));
+      return null;
+    },
+    // An item of the collection, in the default browser: by its address, and its record's key where the address doesn't
+    // make it (an item opened without a link).
+    open_in_browser: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const key = typeof args.key === 'string' && args.key ? args.key : undefined;
+      return operation(lookup, args, () => lookup.openInBrowser(String(args.capabilityId ?? ''), String(args.url ?? ''), key));
+    },
+    /**
+     * Calls `handler` with `{ keys }` each time the collection block's output writes records, however the run was
+     * started. Registered by the document's load script; the same `key` replaces an earlier handler.
+     */
+    on_records: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const capabilityId = collection(lookup, args).capabilityId;
+      const handler = required(callback(lookup, args.handler), 'on_records needs a handler function.');
+      lookup.automation.onRecordsWritten(capabilityId, String(args.key ?? 'default'), (change) => handler({ keys: change.keys, reading: change.reading }));
+      return null;
+    },
+  };
+}
+
+export function queueScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  const queueId = (args: Record<string, unknown>) => String(args.queueId ?? '');
+  return {
+    // `delay_ms` holds the entry back, such as a status check backing off while a report is pending. `context` is the
+    // script's own bookkeeping: handed back with the result, never sent to the target.
+    enqueue: (args, ctx) => resolve(ctx).automation.enqueue(queueId(args), String(args.key ?? ''), args.input ?? null, {
+      ...(typeof args.delay_ms === 'number' ? { delayMs: args.delay_ms } : {}),
+      ...(args.context === undefined ? {} : { context: args.context }),
+      // What the entry is, for people (a job's title): the queue reader lists entries by it.
+      ...(typeof args.label === 'string' && args.label ? { label: args.label } : {}),
+    }),
+    status: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)).find((entry) => entry.key === String(args.key ?? '')) ?? null,
+    list: (args, ctx) => resolve(ctx).automation.listQueue(queueId(args)),
+    cancel: (args, ctx) => {
+      resolve(ctx).automation.cancelQueueEntry(queueId(args), String(args.key ?? ''));
+      return null;
+    },
+    run_next: (args, ctx) => {
+      resolve(ctx).automation.runQueueEntryNext(queueId(args), String(args.key ?? ''));
+      return null;
+    },
+    retry: (args, ctx) => {
+      resolve(ctx).automation.retryQueueEntry(queueId(args), String(args.key ?? ''));
+      return null;
+    },
+    pause: (args, ctx) => {
+      resolve(ctx).automation.pauseQueue(queueId(args));
+      return null;
+    },
+    // Everything waiting is cancelled (its results delivered as cancelled); a call already sent finishes.
+    stop: (args, ctx) => {
+      resolve(ctx).automation.stopQueue(queueId(args));
+      return null;
+    },
+    resume: (args, ctx) => {
+      resolve(ctx).automation.resumeQueue(queueId(args));
+      return null;
+    },
+    /** Registered by the document's load script: told as each entry's call starts, with its key. */
+    on_start: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const handler = required(callback(lookup, args.handler), 'on_start needs a handler function.');
+      lookup.automation.onQueueStart(queueId(args), (started) => {
+        void handler(started as unknown as Record<string, unknown>);
+      });
+      return null;
+    },
+    /**
+     * Registered by the document's load script; results survive reloads, callbacks do not. With `batch`, the handler is
+     * given a list: the results that arrive together (such as every entry a Stop cancels) in one call, as one script
+     * run, rather than a run each.
+     */
+    on_result: (args, ctx) => {
+      const lookup = resolve(ctx);
+      if (args.batch !== true) {
+        const handler = required(callback(lookup, args.handler), 'on_result needs a handler function.');
+        lookup.automation.onQueueResult(queueId(args), (result) => handler(result as unknown as Record<string, unknown>));
+        return null;
+      }
+      const handler = required(scriptFunction(args.handler), 'on_result needs a handler function.');
+      // The results that arrive together, and those that arrive while their call waits its turn, reach the script in it.
+      let open: { results: QueueResult[]; ran: Promise<boolean> } | null = null;
+      lookup.automation.onQueueResult(queueId(args), (result) => {
+        if (open) {
+          open.results.push(result);
+          return open.ran;
+        }
+        const results = [result];
+        const batch: { results: QueueResult[]; ran: Promise<boolean> } = { results, ran: Promise.resolve(false) };
+        batch.ran = new Promise<boolean>((settle) => queueMicrotask(() => {
+          void lookup.automation.callScript(() => {
+            // Begun: results after this go in a call of their own.
+            if (open === batch) open = null;
+            handler(results as unknown as Record<string, unknown>);
+          }).then((ran) => {
+            if (open === batch) open = null;
+            settle(ran);
+          });
+        }));
+        open = batch;
+        return batch.ran;
+      });
+      return null;
+    },
+  };
+}
+
+/**
+ * Where ranking gets its vectors: an endpoint of one of the document's web API blocks that takes `{ input: [texts] }`
+ * and answers with `{ data: [{ embedding }] }` (Heavy Resume's embeddings), called as the block's other endpoints are,
+ * in its profile and under its approval.
+ */
+function endpointEmbeddingSource(lookup: DocumentAutomationLookup, value: unknown): EmbeddingSource {
+  const source = input(value);
+  const capabilityId = String(source.capabilityId ?? '');
+  const endpointId = String(source.endpointId ?? '');
+  const model = typeof source.model === 'string' && source.model ? source.model : null;
+  const capability = required(lookup.webApi(capabilityId), `This document has no web API block "${capabilityId}".`);
+  return {
+    id: `${capabilityId}/${endpointId}/${model ?? 'default'}`,
+    embed: async (texts) => {
+      const result = await lookup.automation.callEndpoint(capability, endpointId, { input: texts, ...(model ? { model } : {}) });
+      const data = input(result.body).data;
+      if (!Array.isArray(data)) throw new WebAutomationError('invalid_request', `"${endpointId}" did not answer with embeddings.`);
+      return data.map((entry) => {
+        const embedding = input(entry).embedding;
+        if (!Array.isArray(embedding)) throw new WebAutomationError('invalid_request', `"${endpointId}" did not answer with embeddings.`);
+        return embedding.map(Number);
+      });
+    },
+  };
+}
+
+/**
+ * The text to rank by: given as a string, or sections of a document a web API block serves (a resume's summary and
+ * skills), which Galaxy opens and reads itself. The script never sees that text; it goes only to the embedding source.
+ */
+/**
+ * The query: a string, or sections of a document a web API block serves, fetched only when the ranking needs them (not
+ * kept from an earlier one, or `refresh`).
+ */
+function rankQuery(lookup: DocumentAutomationLookup, value: unknown): string | FetchedQuery {
+  if (typeof value === 'string') return value;
+  const source = input(value);
+  const capabilityId = String(source.capabilityId ?? '');
+  const capability = required(lookup.webApi(capabilityId), `This document has no web API block "${capabilityId}".`);
+  const sectionIds = Array.isArray(source.sections) ? source.sections.map(String) : [];
+  if (!sectionIds.length) throw new WebAutomationError('invalid_request', 'Name the sections of the document to rank by.');
+  const endpointId = String(source.endpointId ?? '');
+  const documentId = String(source.documentId ?? '');
+  return {
+    id: JSON.stringify([capabilityId, endpointId, documentId, sectionIds]),
+    refresh: source.refresh === true,
+    now: () => new Date().toISOString(),
+    fetch: async () => {
+      const document = await lookup.automation.openServedDocument(capability, endpointId, documentId);
+      // The named sections, in the document's own order.
+      return exportDocumentSourceMarkdown({ ...document, sections: document.sections.filter((section) => sectionIds.includes(section.customId)) });
+    },
+  };
+}
+
+/**
+ * `rank` scores the rows a query returns by how similar a text column is to a query, and writes the scores into a
+ * column (similarity.ts). It reaches the web only through a web API block, so it needs no approval of its own.
+ */
+export function similarityScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  return {
+    rank: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(lookup, args, async () => {
+        const write = input(args.write);
+        const result = await rankRows(lookup.database, endpointEmbeddingSource(lookup, args.embeddings), {
+          rows: String(args.rows ?? ''),
+          key: String(args.key ?? ''),
+          text: String(args.text ?? ''),
+          query: rankQuery(lookup, args.query),
+          write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
+        });
+        lookup.databaseChanged();
+        return result;
+      });
+    },
+    // Rows scored by how much of the closest example their text has (job titles to the ones chosen), locally, with no
+    // service: its words and groups of words, weighted by rarity (similarity.ts).
+    match: (args, ctx) => {
+      const lookup = resolve(ctx);
+      return operation(lookup, args, async () => {
+        const write = input(args.write);
+        const result = await matchRows(lookup.database, {
+          rows: String(args.rows ?? ''),
+          key: String(args.key ?? ''),
+          text: String(args.text ?? ''),
+          examples: String(args.examples ?? ''),
+          ...(typeof args.phrase_share === 'number' ? { phraseShare: args.phrase_share } : {}),
+          ...(typeof args.ending_word_weight === 'number' ? { endingWordWeight: args.ending_word_weight } : {}),
+          ...(Array.isArray(args.minor_words) ? { minorWords: args.minor_words.map(String) } : {}),
+          ...(typeof args.minor_weight === 'number' ? { minorWeight: args.minor_weight } : {}),
+          write: { table: String(write.table ?? ''), key: String(write.key ?? ''), column: String(write.column ?? '') },
+        });
+        lookup.databaseChanged();
+        return result;
+      });
+    },
+  };
+}
+
+/**
+ * A schedule block's jobs, for its document's scripts (docs/job-search/12-scheduled-jobs.md): `pause` one job (`job`,
+ * its id) or all of them, with a reason shown with each; `resume` it, or, without `job`, everything; and `status`. Only
+ * scripts pause jobs, Galaxy never does on its own. A pause is written into the block, so it goes with the file: a paused
+ * job's turns are skipped, saying why, until it is resumed.
+ */
+export function scheduleScriptingMethods(resolve: DocumentAutomationResolver): Record<string, ScriptingMethod> {
+  const schedule = (lookup: DocumentAutomationLookup) => required(lookup.schedule(), 'This document has no schedule block.');
+  const jobId = (config: ScheduleBlockConfig, value: unknown): string | null => {
+    if (value === undefined || value === null) return null;
+    const id = String(value);
+    if (!config.jobs.some((job) => job.id === id)) throw new WebAutomationError('invalid_request', `The schedule block has no job "${id}".`);
+    return id;
+  };
+  return {
+    pause: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
+      if (!reason) throw new WebAutomationError('invalid_request', 'pause needs a reason: it is shown with the job.');
+      lookup.setSchedulePauses({ ...config.paused, [jobId(config, args.job) ?? '*']: reason });
+      return null;
+    },
+    resume: (args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const id = jobId(config, args.job);
+      // One job: its own pause (a pause of every job still holds it). Without a job: every pause.
+      const { [id ?? '*']: _resumed, ...rest } = config.paused;
+      lookup.setSchedulePauses(id ? rest : {});
+      return null;
+    },
+    /** Each job: its id and name, on or off, paused and why, its last turn, and its next (ISO times). */
+    status: (_args, ctx) => {
+      const lookup = resolve(ctx);
+      const config = schedule(lookup);
+      const scheduled = lookup.scheduled();
+      return config.jobs.map((job) => {
+        const on = scheduled?.choices[job.id]?.on === true;
+        const last = scheduled?.lastResults[job.id];
+        const next = scheduled && on ? nextTurnAt(scheduled, job.id) : null;
+        return {
+          id: job.id,
+          name: job.name,
+          on,
+          paused: config.paused[job.id] ?? config.paused['*'] ?? null,
+          last: last ? { at: new Date(last.at).toISOString(), outcome: last.outcome, message: last.message ?? null } : null,
+          // Never turned on: none. On, and never counted from (due now): now.
+          next: on ? new Date(next ?? Date.now()).toISOString() : null,
+        };
+      });
+    },
+  };
+}

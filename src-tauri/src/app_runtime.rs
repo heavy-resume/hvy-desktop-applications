@@ -32,6 +32,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            integration_toolbar_message,
             load_recent_state,
             save_workspace_order,
             save_document_mode_preference,
@@ -49,6 +50,7 @@ pub fn run() {
             write_plugin_project_file,
             write_plugin_project_build,
             integration_browser_command,
+            web_automation_host,
             integration_browser_is_open,
             probe_integration_cookie_storage,
             load_integration_vault_status,
@@ -102,6 +104,7 @@ pub fn run() {
             read_document_file_metadata,
             read_document_file_bytes,
             read_document_file_stamp,
+            append_trace_line,
             read_embedding_sidecar_file_bytes,
             write_embedding_sidecar_file,
             write_embedding_sidecar_file_raw,
@@ -136,6 +139,7 @@ pub fn run() {
             restore_document_file,
             delete_document_file,
             delete_workspace_folder,
+            rename_workspace_folder,
             save_document_to_workspace,
             save_document_to_workspace_raw,
             copy_document_to_workspace,
@@ -256,10 +260,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .id("save-to-workspace")
         .enabled(false)
         .build(app)?;
-    let document_encryption_unsaved_changes = MenuItemBuilder::new("(unsaved changes)")
-        .id("document-encryption-unsaved-changes")
-        .enabled(false)
-        .build(app)?;
+    let document_encryption_unsaved_changes = document_encryption_unsaved_changes_item(app)?;
     let show_document_encryption_unsaved_changes = app
         .state::<NativeMenuState>()
         .file_menu
@@ -329,6 +330,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
         .item(&MenuItemBuilder::new("Manage Plugins...").id("manage-plugins").build(app)?)
         .separator()
         .item(&MenuItemBuilder::new("Power Scripting...").id("review-scripting").build(app)?)
+        .item(&MenuItemBuilder::new("Scheduled Jobs...").id("scheduled-jobs").build(app)?)
         .build()?;
     let edit = SubmenuBuilder::with_id(app, "edit-menu", "Edit")
         .item(&app_shortcut_menu_item(app, "Undo", "undo", "CmdOrCtrl+Z")?)

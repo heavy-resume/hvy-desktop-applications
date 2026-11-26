@@ -541,6 +541,18 @@
   top: 6px;
 }
 
+.integration-example-value {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.integration-range-cell-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .integration-example-table td.missing {
   color: var(--hvy-text-muted, #5f6a66);
   font-style: italic;

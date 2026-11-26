@@ -1,11 +1,13 @@
+import { startScheduledJobs } from './scheduledJobs';
+import { startTrace } from './traceLog';
 import { installAiChatClient } from './aiClient';
-import { completeWebMcpBrokerRequest, includedDocuments, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
+import { completeWebMcpBrokerRequest, includedDocuments, isElectronRuntime, isTauriRuntime, loadAiSettings, loadAppSettings, loadArchivedWorkspaces, loadIncludedDocument, loadLaunchDocumentPaths, loadMcpClientInstallStatus, loadMcpServerStatus, loadMcpSettings, loadMcpStdioLaunchConfig, loadRecentState, onAppCloseRequest, onIntegrationBrowserEvent, onIntegrationInspectionResult, onMenuEvent, onOpenDocumentPath, onWebMcpBrokerRequest, openPluginBuilderWindow, readDocumentFile, readSystemClipboardText, setNativeWindowTheme, showMainWindow, startMcpServer, type DocumentFile } from './backend';
 import { controlIntegrationBrowser } from './integrationBrowser';
 import { applyColorTheme, effectiveColorThemeColors, loadColorThemeSettings, nativeWindowTheme } from './colorTheme';
 import { configureDebugLog, measureDebug, measureDebugAsync } from './debugLog';
 import { copyMountedDocumentAsRichText, deserializeHvy, redoMountedDocument, undoMountedDocument } from './hvy';
-import { state, workspaceRelativeFilePath } from './state';
-import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
+import { siteSetupFields, state, workspaceRelativeFilePath } from './state';
+import { handlers, clearArchivedHomepageDocument, defaultDocumentMode, documentSessions, fileNameFromPath, hasOpenedDocumentTabs, handleAppCloseRequest, loadWorkspaceEntry, loadZoomSettings, loadDismissedRecentTabs, applyZoomSettings, markDocumentTabOpened, mountRoot, openDocument, openLaunchDocumentPath, openRecoveryDialog, openRecoveryDialogOnBoot, preserveCurrentDocumentSession, readDocumentColorPreference, readHotReloadSessionSnapshot, refreshSavedTemplates, renderAllAroundDocument, rerender, restoreMountScrollRatio, runBusy, selectDocumentTab, setMountRoot, setupErrorSurface, showStartupError, syncDocumentTabs, syncFileMenuState, syncMcpWorkspaces, workspaceDisplayNameFromPath, workspaceFileAiAccess, writeHotReloadSessionSnapshot, type DocumentSession, type HotReloadDocumentSnapshot } from './main';
 import { setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 import { render } from './ui';
 import { beginDocumentNavigation, cancelDocumentNavigation, type DocumentNavigationDirection } from './documentNavigationHistory';
@@ -13,12 +15,20 @@ import { availableRecoveryBackups } from './recoveryDocuments';
 import { refreshInstalledPlugins } from './pluginManager';
 import { handleWebCapabilityIntegrationResult } from './webCapabilityRuntime';
 import { handleIntegrationWebMcpResult } from './integrationWebMcpRuntime';
+import { browserClosed, browserResultRequestId } from './browserRequests';
 import { findRichTextActionButton, hasOpenHvyModal } from './uiShortcuts';
-import { runtimeDocumentForFile } from './runtimeDocuments';
+import { pathForFileKey, runtimeDocumentForFile } from './runtimeDocuments';
 import { extractEncryptionKeyIds, tryEnsureDocumentKeysLoaded } from './documentKeys';
-import { loadWorkspaceExpansionState } from './workspaceExpansionState';
+import { loadWorkspaceExpansionState, loadWorkspaceFolderExpansionState } from './workspaceExpansionState';
 import { handleWebMcpBrokerRequest } from './webMcpBrokerClient';
 import { isHomepageOpen } from './fileActions';
+import { installDevWebAutomationHost } from './webAutomation/devHost';
+import { addMatchingExample, installSiteSetup, itemPicked, wrongItemPage } from './siteSetupSession';
+import type { InspectorRecord } from './webAutomation/nativeHost';
+import { PAGINATION_COMMAND_NAMES } from './mainHandlersSettings';
+import { installBackgroundActivity } from './backgroundActivity';
+import { hasWebAutomationHost, setWebAutomationHost } from './webAutomation/app';
+import { createElectronBrowserHost, createTauriBrowserHost } from './webAutomation/nativeHost';
 
 let findShortcutBound = false;
 
@@ -30,10 +40,14 @@ if (import.meta.hot) {
 }
 
 export async function boot(): Promise<void> {
+  // Diagnostics, when asked for (localStorage.hvyTrace): before anything else, so a hang during startup is traced too.
+  startTrace();
   setupErrorSurface();
   try {
     loadZoomSettings();
+    loadDismissedRecentTabs();
     state.workspaceExpanded = loadWorkspaceExpansionState();
+    state.workspaceFolderExpanded = loadWorkspaceFolderExpansionState();
     state.colorTheme = loadColorThemeSettings();
     applyAppColorTheme(null);
     setMountRoot(render(state, handlers));
@@ -45,6 +59,14 @@ export async function boot(): Promise<void> {
     await refreshRecents();
     await refreshArchivedWorkspaces();
     state.appSettings = await loadAppSettings();
+    await installDevWebAutomationHost();
+    // Web automation runs on the desktop app's browser host, unless development mode installed a mock one.
+    if (!hasWebAutomationHost() && isElectronRuntime()) setWebAutomationHost(createElectronBrowserHost());
+    if (!hasWebAutomationHost() && isTauriRuntime()) setWebAutomationHost(createTauriBrowserHost());
+    // Collections set up their sites in the Integrations manager, saving into the document on Done.
+    installSiteSetup();
+    // Marks the tabs of documents whose background work waits for the user.
+    installBackgroundActivity();
     await refreshInstalledPlugins();
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     state.aiSettings = await loadAiSettings();
@@ -60,17 +82,69 @@ export async function boot(): Promise<void> {
     await onAppCloseRequest(() => {
       void handleAppCloseRequest();
     });
-    await onIntegrationInspectionResult(async (result) => {
+    // What the integration browser's host reports, which no page can send (backend.ts).
+    await onIntegrationBrowserEvent((result) => {
       if (result && typeof result === 'object'
         && (result as { kind?: unknown }).kind === 'integration-navigation-request') {
         handlers.requestIntegrationNavigationApproval(result);
         return;
       }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
+        // Every request still waiting on the window fails (its owner clears its own state), and a selection being made
+        // in it ends, back where it started.
+        const profileId = (result as { profileId?: unknown }).profileId;
+        if (typeof profileId === 'string') browserClosed(profileId);
+        if (state.integrationReadyCheckSelectionPending) {
+          state.integrationReadyCheckSelectionPending = false;
+          state.integrationReadyChecksDialogOpen = true;
+        }
+        if (state.integrationActionSelectionPending) {
+          state.integrationActionSelectionPending = false;
+          state.integrationActionBuilderOpen = true;
+        }
+        if (state.integrationCommandSelectionPending) {
+          state.integrationCommandBuilderOpen = false;
+          state.integrationCommandSelectionPending = false;
+          state.integrationCommandDraftSteps = [];
+        }
+        state.status = 'Integration browser closed';
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
+        const action = (result as { action?: unknown }).action;
+        const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
+        const page = integration?.pages[0];
+        if (!integration || !page) throw new Error('The selected integration page is unavailable.');
+        if (action === 'add-page-command') handlers.addCommandForIntegrationPage(integration.id, page.id);
+        if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
+        return;
+      }
+    });
+    await onIntegrationInspectionResult(async (result) => {
       if (handleIntegrationWebMcpResult(result)) return;
       if (handleWebCapabilityIntegrationResult(result)) return;
-      if (result && typeof result === 'object'
-        && (result as { kind?: unknown }).kind === 'integration-ready-check-validation') {
-        handlers.completeIntegrationReadyCheckValidation(result);
+      // An answer to a request that already ended (timed out, stopped, or its window closed) has no one left to go to.
+      if (browserResultRequestId(result)) return;
+      // Saved examples the page found as it added content, after its live examples check: each found replaces "No live fit",
+      // or a weaker fit, while the record type they belong to is still being edited.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-live-examples') {
+        const update = result as { context?: { actionId?: unknown }; records?: unknown[] };
+        if (!state.integrationActionBuilderOpen || !update.context?.actionId || update.context.actionId !== state.integrationActionDraftActionId) return;
+        const score = (record: unknown) => (record && typeof record === 'object' && typeof (record as { score?: unknown }).score === 'number' ? (record as { score: number }).score : -1);
+        const found = update.records ?? [];
+        const known = state.integrationActionLiveExampleRecords;
+        state.integrationActionLiveExampleRecords = Array.from({ length: Math.max(found.length, known.length) }, (_, index) => (score(found[index]) > score(known[index]) ? found[index] : known[index] ?? null));
+        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      // Picking cancelled in the page (Escape while picking a box, or the toolbar's cancel): nothing was picked, and Galaxy
+      // stops waiting for it.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-inspection-cancelled') {
+        state.integrationActionSelectionPending = false;
+        state.integrationCommandSelectionPending = false;
+        state.status = 'Selection cancelled';
+        rerender({ preserveMountedDocument: true });
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-scope-selection-request') {
@@ -83,19 +157,9 @@ export async function boot(): Promise<void> {
         await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;
       }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-toolbar-action') {
-        const action = (result as { action?: unknown }).action;
-        const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId);
-        const page = integration?.pages[0];
-        if (!integration || !page) throw new Error('The selected integration page is unavailable.');
-        if (action === 'add-page-command') handlers.addCommandForIntegrationPage(integration.id, page.id);
-        if (action === 'define-record-type') handlers.addActionForIntegrationPage(integration.id, page.id);
-        return;
-      }
+      // The scan on each page load: one asked for is answered as its request, above.
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-source-discovery') {
         const discovery = result as { context?: { pageId?: string }; sources?: import('./integrationBrowser').IntegrationStructuredSource[] };
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = null;
         const selectedPageId = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.selectedIntegrationId)?.pages[0]?.id ?? null;
         state.integrationStructuredSourcePageId = discovery.context?.pageId ?? selectedPageId;
         state.integrationStructuredSources = discovery.sources ?? [];
@@ -103,41 +167,33 @@ export async function boot(): Promise<void> {
           ? `Found ${state.integrationStructuredSources.length} structured data source${state.integrationStructuredSources.length === 1 ? '' : 's'}`
           : 'No structured data sources found';
         rerender({ preserveMountedDocument: true });
-        if (!(discovery.context as { automatic?: boolean } | undefined)?.automatic) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-result') {
-        const structured = result as { context?: { sourceName?: string }; value?: unknown };
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = null;
-        state.integrationStructuredResultName = structured.context?.sourceName ?? 'Structured data';
-        state.integrationStructuredResult = structured.value;
-        state.integrationStructuredResultOpen = true;
-        state.status = `Fetched ${state.integrationStructuredResultName}`;
-        rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-        return;
-      }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-structured-error') {
-        state.integrationStructuredSourcePending = false;
-        state.integrationStructuredSourceError = String((result as { message?: unknown }).message ?? 'The structured source could not be fetched.');
-        state.status = 'Structured data fetch failed';
-        rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-recording-cancelled') {
         state.integrationCommandBuilderOpen = false;
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftSteps = [];
+        state.integrationCommandDraftPagination = false;
+        state.integrationCommandDraftPrepare = false;
         state.status = 'Command recording cancelled';
         rerender({ preserveMountedDocument: true });
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-command-recording') {
-        const recording = result as { steps?: unknown };
+        const recording = result as { steps?: unknown; pagination?: unknown };
         state.integrationCommandSelectionPending = false;
         state.integrationCommandDraftSteps = Array.isArray(recording.steps) ? recording.steps : [];
+        // A site setup's pagination is one click, of the kind chosen in the browser, with a known name: nothing to
+        // name or review, so it is saved as picked.
+        // A site setup's steps to its list: saved as recorded, back in their window, with nothing to name.
+        if (state.integrationCommandDraftPrepare) {
+          handlers.saveIntegrationCommand('Get to the list', {});
+          return;
+        }
+        if (state.integrationCommandDraftPagination && (recording.pagination === 'next' || recording.pagination === 'page-number')) {
+          handlers.saveIntegrationCommand(PAGINATION_COMMAND_NAMES[recording.pagination], {}, { pagination: recording.pagination });
+          return;
+        }
         state.integrationCommandBuilderOpen = true;
         state.status = `Recorded ${state.integrationCommandDraftSteps.length} verified ${state.integrationCommandDraftSteps.length === 1 ? 'step' : 'steps'}`;
         rerender({ preserveMountedDocument: true });
@@ -156,67 +212,74 @@ export async function boot(): Promise<void> {
         rerender({ preserveMountedDocument: true });
         return;
       }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-extraction') {
-        state.integrationActionFetchPendingId = null;
-        state.integrationActionFetchError = null;
-        const extraction = result as { status?: string; message?: string; context?: { mode?: string; actionId?: string; actionName?: string }; records?: unknown[]; diagnostics?: unknown; minimumConfidence?: unknown };
-        if (extraction.status === 'not-ready') {
-          state.integrationActionPreviewPending = false;
-          state.integrationActionEditPageLoading = false;
-          state.integrationActionFetchError = extraction.message ?? 'The expected page is not ready.';
-          state.status = 'Page is not ready';
-          rerender({ preserveMountedDocument: true });
-          await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
-          return;
-        }
-        if (typeof extraction.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, extraction.minimumConfidence));
-        const isBackgroundExampleValidation = extraction.context?.mode === 'examples';
-        if (isBackgroundExampleValidation) {
-          state.integrationActionLiveExampleRecords = extraction.records ?? [];
-          state.integrationActionEditPageLoading = false;
-          state.status = `Validated ${(extraction.records ?? []).filter(Boolean).length} live examples`;
-        } else if (extraction.context?.mode === 'builder') {
-          state.integrationActionPreviewPending = false;
-          state.integrationActionPreviewRecords = extraction.records ?? [];
-          state.integrationActionPreviewDiagnostics = extraction.diagnostics ?? null;
-          state.integrationActionBuilderStep = 'preview';
-          state.integrationActionBuilderOpen = true;
-        } else {
-          state.integrationActionResultName = extraction.context?.actionName ?? 'Action results';
-          state.integrationActionResultRecords = extraction.records ?? [];
-          state.integrationActionResultActionId = extraction.context?.actionId ?? null;
-          state.integrationActionResultOpen = true;
-        }
-        state.status = `Extracted ${(extraction.records ?? []).length} matching items`;
-        rerender({ preserveMountedDocument: true });
-        if (!isBackgroundExampleValidation) await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+      // A site setup's example item: what opens it, clicked in a row of the list, to open as a run does.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-record-choice') {
+        const { record, opener } = result as { record?: InspectorRecord; opener?: { snapshot: unknown; href: string | null } };
+        if (record && opener) itemPicked(record, opener);
         return;
       }
-      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-browser-closed') {
-        if (state.integrationReadyCheckSelectionPending) {
-          state.integrationReadyCheckSelectionPending = false;
-          state.integrationReadyChecksDialogOpen = true;
+      // Highlight matches' confidence, set on the page: the record type being built takes it.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-pattern-confidence') {
+        const { minimumConfidence } = result as { minimumConfidence?: unknown };
+        if (typeof minimumConfidence === 'number' && state.integrationActionBuilderOpen) {
+          state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, minimumConfidence));
+          rerender({ preserveMountedDocument: true });
         }
-        state.integrationActionSelectionPending = false;
-        state.integrationActionPreviewPending = false;
-        state.integrationActionBuilderOpen = true;
-        if (state.integrationCommandBuilderOpen) {
-          state.integrationCommandBuilderOpen = false;
-          state.integrationCommandSelectionPending = false;
-          state.integrationCommandDraftSteps = [];
-        }
-        state.status = 'Integration browser closed';
-        rerender({ preserveMountedDocument: true });
+        return;
+      }
+      // Show matching's Add as example: the page goes on to its site setup as another example.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-matching-add-example') {
+        addMatchingExample();
+        return;
+      }
+      // Wrong page, picking the fields of a site setup's item just opened from the list: back to the list.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-wrong-page') {
+        wrongItemPage();
+        return;
+      }
+      // Undo last with no fields picked: the box just picked is taken back, and the page picks a box again.
+      if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-target-collection-undo-parent') {
+        handlers.removeIntegrationActionSelection('example', state.integrationActionTargetSelectionParentIndex);
+        handlers.addIntegrationActionAnchor();
         return;
       }
       if (result && typeof result === 'object' && (result as { kind?: unknown }).kind === 'integration-target-collection') {
         const items = Array.isArray((result as { items?: unknown }).items) ? (result as { items: unknown[] }).items : [];
+        // Fields picked first, on a page with one record: the box the browser took around them is the record's example.
+        const derivedParent = (result as { parent?: unknown }).parent;
+        if (derivedParent) {
+          const derivedIndex = state.integrationActionAnchors.length;
+          state.integrationActionAnchors.push(derivedParent);
+          state.integrationActionAnchorRules.push([]);
+          state.integrationActionSelectedParentIndex = derivedIndex;
+          state.integrationActionTargetSelectionParentIndex = derivedIndex;
+          state.integrationInspectionResult = derivedParent;
+          state.inspectionPrivacyRules = [];
+          // Another example of a record type that has fields: each has nothing in it yet, until picked below.
+          state.integrationActionTargetVariants.forEach((variants, fieldIndex) => {
+            variants[derivedIndex] = null;
+            state.integrationActionTargetNegativeVariants[fieldIndex][derivedIndex] = null;
+            state.integrationActionTargetAbsentExamples[fieldIndex][derivedIndex] = false;
+          });
+        }
         const parentIndex = state.integrationActionTargetSelectionParentIndex;
         items.forEach((item) => {
+          // A field the record type already has, picked in another example: this example's of it, not a new field (a site
+          // setup's example added with the fields read wrongly picked again; the rest keep what it suggested).
+          const named = (item as { fieldId?: unknown }).fieldId;
+          const existingField = typeof named === 'string' && named ? state.integrationActionTargetLabels.indexOf(named) : -1;
+          if (existingField >= 0) {
+            state.integrationActionTargetVariants[existingField][parentIndex] = item;
+            state.integrationActionTargetNegativeVariants[existingField][parentIndex] = null;
+            state.integrationActionTargetAbsentExamples[existingField][parentIndex] = false;
+            return;
+          }
           state.integrationActionExamples.push(item);
           state.integrationActionTargetIds.push(`field-${crypto.randomUUID()}`);
           state.integrationActionExampleRules.push([]);
-          state.integrationActionTargetLabels.push('');
+          // The field it was said to be, as it was picked (a site setup's collection field), or one to assign here.
+          const fieldId = (item as { fieldId?: unknown }).fieldId;
+          state.integrationActionTargetLabels.push(typeof fieldId === 'string' ? fieldId : '');
           state.integrationActionTargetCardinalities.push('single');
           state.integrationActionTargetOptional.push(true);
           state.integrationActionTargetParentIndexes.push(parentIndex);
@@ -301,14 +364,15 @@ export async function boot(): Promise<void> {
           state.integrationActionTargetAbsentExamples[fieldIndex][parentIndex] = false;
           state.integrationActionExamples[fieldIndex] = state.integrationActionTargetVariants[fieldIndex].find(Boolean) ?? result;
           const nextFieldIndex = fieldIndex + 1;
-          if (nextFieldIndex < state.integrationActionExamples.length) {
+          // Picking an example's fields one by one goes on to the next; a range's boundary picked again is one change.
+          if (state.integrationActionSelectionKind === 'target' && nextFieldIndex < state.integrationActionExamples.length) {
             state.integrationActionTargetSelectionFieldIndex = nextFieldIndex;
             state.integrationActionSelectionPending = true;
             state.status = `Select ${state.integrationActionTargetLabels[nextFieldIndex] || `field ${nextFieldIndex + 1}`} in this example`;
             rerender({ preserveMountedDocument: true });
             const parentSnapshot = state.integrationActionAnchors[parentIndex];
             const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
-            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot });
+            await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot, prompt: state.status });
             return;
           }
         }
@@ -323,14 +387,24 @@ export async function boot(): Promise<void> {
       rerender({ preserveMountedDocument: true });
       if (collectInitialFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
-        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, undoParent: true, ...(state.siteSetup ? { prompt: state.siteSetup.prompts?.fields, fieldChoices: siteSetupFields() } : {}) });
         return;
       }
       if (collectExistingFields) {
         const parentCssPath = (result as { selected?: { cssPath?: string } }).selected?.cssPath;
+        // A site setup's example: what it suggested for each field stays, and only the fields read wrongly or missed are
+        // picked again, each assigned its field, then Done.
+        if (siteSetupFields()) {
+          state.integrationActionTargetSelectionFieldIndex = null;
+          state.status = 'Pick the fields read wrongly in this example, then Done';
+          rerender({ preserveMountedDocument: true });
+          await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, multiSelect: true, prompt: 'Pick any field read wrongly or missed here, then Done', fieldChoices: siteSetupFields() });
+          return;
+        }
+        // Elsewhere each field is picked in turn, named on the page as here.
         state.status = `Select ${state.integrationActionTargetLabels[0] || 'field 1'} in this example`;
         rerender({ preserveMountedDocument: true });
-        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result });
+        await controlIntegrationBrowser('inspect-target', state.selectedIntegrationProfileId, { parentCssPath, parentSnapshot: result, prompt: state.status });
         return;
       }
       await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
@@ -362,6 +436,7 @@ export async function boot(): Promise<void> {
       if (event === 'debug-log') handlers.openDebugLog();
       if (event === 'app-settings') handlers.openAppSettings();
       if (event === 'review-scripting') handlers.openScriptingReview();
+      if (event === 'scheduled-jobs') handlers.openScheduledJobs();
       if (event === 'manage-plugins') handlers.openPluginManager();
       if (event === 'plugin-builder') void openPluginBuilderWindow(
         state.workspaces.map((workspace) => workspace.path),
@@ -411,6 +486,8 @@ export async function boot(): Promise<void> {
     syncFileMenuState({ force: true });
     await openRecoveryDialogOnBoot();
     startBackupTimer();
+    // Documents' scheduled jobs, while Galaxy is open (scheduledJobs.ts).
+    startScheduledJobs();
     setupRecoveryLifecycle();
     if (!state.document) {
       await restoreStartupDocument();
@@ -664,7 +741,7 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
         includedDocumentId: homepage.id,
       });
     } else {
-      const file = await readDocumentFile(homepage.path);
+      const file = await readDocumentFile(pathForFileKey(homepage.file));
       if (!await documentFileCanOpenWithoutPrompt(file)) {
         state.homepageError = null;
         state.status = 'Encrypted homepage is locked; open it to unlock.';
@@ -675,7 +752,7 @@ export async function openHomepage(options: { force?: boolean } = {}): Promise<v
     state.homepageError = null;
   } catch {
     const target = homepage.kind === 'file'
-      ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), homepage.path)
+      ? workspaceRelativeFilePath(state.workspaces, state.workspaceEntries.map((entry) => entry.path), pathForFileKey(homepage.file))
       : includedDocuments.find((document) => document.id === homepage.id)?.name ?? homepage.id;
     const detail = homepage.kind === 'file'
       ? 'This document is not currently available in its workspace.'

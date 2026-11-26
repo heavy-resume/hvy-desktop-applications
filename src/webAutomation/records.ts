@@ -1,0 +1,108 @@
+/**
+ * What a collection run emits. Runs do not store or merge anything: the
+ * consumer (a record sink in the document, a script, or MCP) decides what a
+ * record means and where it goes.
+ */
+/**
+ * - `ok`: read from its own page;
+ * - `listed`: read from its list, its own page not read yet (a run that reads only lists, or one that has yet to reach it);
+ * - `no_pattern`: its page was opened, and nothing read it;
+ * - `invalid`: read, but missing what its collection requires.
+ */
+export type CollectedRecordState = 'ok' | 'listed' | 'no_pattern' | 'invalid';
+
+export interface CollectedRecordProvenance {
+  sourceUrl: string;
+  collectedAt: number;
+  /** The pattern that read it: its page's, or, listed, its list's. Absent when nothing matched. */
+  patternId?: string;
+  /**
+   * The site setup it came from: the one whose list showed it, or whose pattern read it. Kept when its page can't be
+   * read, so reading it again (`extract`) reads it with that setup.
+   */
+  siteId?: string;
+}
+
+export interface CollectedRecord {
+  /** Identity used for de-duplication, from the collection's key strategy. */
+  key: string;
+  url: string;
+  values: Record<string, unknown>;
+  provenance: CollectedRecordProvenance;
+  state: CollectedRecordState;
+  problem?: string;
+}
+
+/**
+ * How a record's identity is derived:
+ * - `url`: the canonical URL of the record's page (default);
+ * - `field`: one extracted value, such as a posting identifier;
+ * - `fields`: several values joined, for records without a stable page.
+ */
+export type RecordKeyStrategy =
+  | { kind: 'url' }
+  | { kind: 'field'; field: string }
+  | { kind: 'fields'; fields: string[] };
+
+/** Query parameters that only track how a link was reached. Collections can add their own. */
+export const DEFAULT_IGNORED_QUERY_PARAMETERS = ['utm_*', 'gclid', 'fbclid', 'mc_cid', 'mc_eid'];
+
+function parameterMatcher(pattern: string): (name: string) => boolean {
+  const lower = pattern.toLowerCase();
+  return lower.endsWith('*') ? (name) => name.toLowerCase().startsWith(lower.slice(0, -1)) : (name) => name.toLowerCase() === lower;
+}
+
+/** How a collection tells two addresses are the same page (its settings of these names). */
+export interface UrlKeyOptions {
+  /** Query parameters ignored (the default covers tracking parameters). */
+  ignoredQueryParameters?: string[];
+  /** The fragment is kept: on a single-page site it names the page (Gmail's `#label/…/<message>`). */
+  keepUrlFragment?: boolean;
+}
+
+/**
+ * Canonical URL: lowercase host, no ignored parameters, sorted query, no trailing slash, and no fragment unless it is
+ * kept (`keepUrlFragment`).
+ */
+export function canonicalUrl(value: string, { ignoredQueryParameters = DEFAULT_IGNORED_QUERY_PARAMETERS, keepUrlFragment = false }: UrlKeyOptions = {}): string {
+  const url = new URL(value);
+  const ignored = ignoredQueryParameters.map(parameterMatcher);
+  if (!keepUrlFragment) url.hash = '';
+  url.hostname = url.hostname.toLowerCase();
+  const kept = [...url.searchParams.entries()]
+    .filter(([name]) => !ignored.some((matches) => matches(name)))
+    .sort(([left], [right]) => left.localeCompare(right));
+  url.search = '';
+  for (const [name, item] of kept) url.searchParams.append(name, item);
+  if (url.pathname.length > 1 && url.pathname.endsWith('/')) url.pathname = url.pathname.slice(0, -1);
+  return url.href;
+}
+
+function valueText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  return typeof value === 'number' ? String(value) : '';
+}
+
+/** The record key, or null when the strategy's fields are not available yet. */
+export function recordKey(
+  strategy: RecordKeyStrategy,
+  url: string,
+  values: Record<string, unknown>,
+  urlOptions?: UrlKeyOptions,
+): string | null {
+  if (strategy.kind === 'url') return canonicalUrl(url, urlOptions);
+  const fields = strategy.kind === 'field' ? [strategy.field] : strategy.fields;
+  const parts = fields.map((field) => valueText(values[field]));
+  return parts.every(Boolean) ? parts.join('\u001f') : null;
+}
+
+/** The first problem with a record's required fields, named by their labels, or null when it has none. */
+export function validateRecord(values: Record<string, unknown>, fields: Array<{ id: string; label: string; required?: boolean; minLength?: number }> = []): string | null {
+  for (const field of fields) {
+    if (!field.required) continue;
+    const text = valueText(values[field.id]);
+    if (!text) return `"${field.label}" is missing.`;
+    if (field.minLength && text.length < field.minLength) return `"${field.label}" is shorter than ${field.minLength} characters.`;
+  }
+  return null;
+}

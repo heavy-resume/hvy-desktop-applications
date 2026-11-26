@@ -1,0 +1,232 @@
+import { describe, expect, it, onTestFinished } from 'vitest';
+import { readCollectionBlockConfig, readQueueBlockConfig, readWebApiBlockConfig, switchToPublishedService, WEB_AUTOMATION_SCHEMA_VERSION } from './configs';
+import { loadPublishedService, publishedServices } from './serviceManifests';
+import { webApiAuthorizationParts } from './webApi';
+import { analysisServiceCapability, analysisServiceManifest } from '../test/webAutomation/analysisService';
+import { ATS_ORIGIN, atsDetailPattern, atsListingPattern, LISTING_FIELDS, listingCollection, talentSuiteDetailPattern, talentSuiteListingPattern } from '../test/webAutomation/sites';
+
+const rawWebApi = (overrides: Record<string, unknown> = {}) => ({
+  schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,
+  ...structuredClone(analysisServiceCapability),
+  mcp: { endpointIds: ['profile'] },
+  ...overrides,
+});
+
+const errorsOf = (result: { ok: boolean; errors?: string[] }) => (result.ok ? [] : result.errors ?? []);
+
+describe('a start page disabled', () => {
+  it('keeps the flag through the configuration reader, and only when it is true', () => {
+    const block = (startPages: unknown[]) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages });
+    const read = block([{ id: 'a', url: 'https://jobs.test/a', disabled: true }, { id: 'b', url: 'https://jobs.test/b', disabled: false }]);
+    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', disabled: true }, { id: 'b', url: 'https://jobs.test/b' }]);
+  });
+});
+
+describe('how often start pages are checked', () => {
+  it('keeps the cadence and when a page was checked, defaulting to weekly and ten due pages a run, and drops a time that is not one', () => {
+    const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [
+      { id: 'a', url: 'https://jobs.test/a', checkTiming: { every: 3 * 1440 }, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b', checkTiming: { at: '2:00', days: [1] }, checkedAt: 'yesterday' },
+      { id: 'c', url: 'https://jobs.test/c', checkTiming: { every: 'often' } },
+    ] });
+    expect(read.ok && read.value.collection).toMatchObject({ checkTiming: { every: 7 * 1440 }, duePagesPerRun: 10 });
+    expect(read.ok && read.value.collection.startPages).toEqual([
+      { id: 'a', url: 'https://jobs.test/a', checkTiming: { every: 3 * 1440 }, checkedAt: '2026-11-10T08:00:00.000Z' },
+      { id: 'b', url: 'https://jobs.test/b', checkTiming: { at: '02:00', days: [1] } },
+      { id: 'c', url: 'https://jobs.test/c' },
+    ]);
+  });
+});
+
+describe('a site setup\'s settings', () => {
+  it('keeps clicking through, the fragment, and the row key, and refuses a row key that is not a field', () => {
+    const block = (site: Record<string, unknown>) => readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'mail', fields: [{ id: 'title', label: 'Subject' }], startPages: [], sites: [{ id: 'gmail', name: 'Gmail', ...site }] });
+    const read = block({ browse: true, keepUrlFragment: true, rowKey: ['title'] });
+    expect(read.ok && read.value.collection.sites).toEqual([{ id: 'gmail', name: 'Gmail', browse: true, keepUrlFragment: true, rowKey: ['title'] }]);
+    // Each unset unless stored as set.
+    const plain = block({ browse: false, keepUrlFragment: 'yes', rowKey: [] });
+    expect(plain.ok && plain.value.collection.sites).toEqual([{ id: 'gmail', name: 'Gmail' }]);
+    expect(errorsOf(block({ rowKey: ['sender'] }))).toEqual(['Site setup "Gmail" tells its rows apart by "sender", which is not one of the fields.']);
+  });
+});
+
+describe('getting a list where it is read from', () => {
+  it('keeps a list pattern\'s prepare command and its anchors, and refuses a command it does not have', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const prepared = { ...atsListingPattern, prepareCommandId: 'search', anchors: [{ name: 'Search field', expectedValue: 'Engineer' }], matcher: { pattern: {}, commands: { search: { id: 'search' }, 'next-page': { id: 'next-page' } } } };
+    const block = (pattern: Record<string, unknown>) => readCollectionBlockConfig({ schemaVersion: 1, ...listingCollection([acme]), startPages: [{ id: 'acme', url: acme }], patterns: [pattern] });
+    const read = block(prepared);
+    expect(read.ok && read.value.collection.patterns[0]).toMatchObject({ prepareCommandId: 'search', anchors: [{ name: 'Search field', expectedValue: 'Engineer' }] });
+    expect(errorsOf(block({ ...prepared, prepareCommandId: 'filter' }))).toEqual([`Pattern "${atsListingPattern.name}" runs command "filter", which it does not have.`]);
+  });
+});
+
+describe('a start page\'s name', () => {
+  it('is kept trimmed, and left out when blank', () => {
+    const read = readCollectionBlockConfig({ schemaVersion: 1, capabilityId: 'jobs', fields: [{ id: 'title', label: 'Title' }], startPages: [{ id: 'a', url: 'https://jobs.test/a', name: '  Acme careers ' }, { id: 'b', url: 'https://jobs.test/b', name: '  ' }] });
+    expect(read.ok && read.value.collection.startPages).toEqual([{ id: 'a', url: 'https://jobs.test/a', name: 'Acme careers' }, { id: 'b', url: 'https://jobs.test/b' }]);
+  });
+});
+
+describe('block configuration readers', () => {
+  it('round-trips the web API snapshot and its MCP exposure', () => {
+    const result = readWebApiBlockConfig(rawWebApi());
+    expect(result).toEqual({ ok: true, value: { capabilityId: analysisServiceCapability.capabilityId, capability: analysisServiceCapability, mcp: { endpointIds: ['profile'] } } });
+  });
+
+  it('switches an inline block to the service\'s published file, keeping AI tools on what its permissions grant', async () => {
+    publishedServices.enabled = true;
+    onTestFinished(() => {
+      publishedServices.enabled = false;
+    });
+    const manifest = analysisServiceManifest();
+    // A service the test publishes itself, so no other test's fetch of the mock service is reused.
+    const origin = 'https://switch.mock-analysis.test';
+    await loadPublishedService(origin, async () => new TextEncoder().encode(JSON.stringify(manifest)), true);
+    const switched = switchToPublishedService(rawWebApi({ mcp: { endpointIds: ['profile', 'create-analysis'] } }), origin, manifest, ['analyses']);
+    // The snapshot's keys go (set to undefined, as a merged change removes them).
+    expect(Object.entries(switched).filter(([, value]) => value !== undefined).map(([key]) => key).sort()).toEqual(['capabilityId', 'mcp', 'permissions', 'schemaVersion', 'service']);
+    const read = readWebApiBlockConfig(switched);
+    expect(read).toMatchObject({ ok: true, value: { service: { origin, permissions: ['analyses'] }, mcp: { endpointIds: ['create-analysis'] } } });
+    expect(read.ok && read.value.capability?.published?.permissions.map((permission) => permission.id)).toEqual(['analyses']);
+  });
+
+  it('reads response rules: a status or several, body values by JSON pointer, an action, and where the message is', () => {
+    const read = readWebApiBlockConfig(rawWebApi({ responses: [{ status: 402, body: { '/code': 'credits_exhausted', '/retryable': false }, action: 'pause', message: '/error' }, { status: [429, 503], action: 'retry' }] }));
+    expect(read.ok && read.value.capability?.responses).toEqual([
+      { status: [402], body: { '/code': 'credits_exhausted', '/retryable': false }, action: 'pause', message: '/error' },
+      { status: [429, 503], action: 'retry' },
+    ]);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ responses: { status: 402 } })))).toEqual(['The response rules must be a list.']);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ responses: [{ status: 99, action: 'wait', body: { code: 'x', '/n': { deep: 1 } }, message: 'error' }] })))).toEqual([
+      'Response rule 1 needs a status, or a list of them, from 100 to 599.',
+      'Response rule 1\'s action must be retry, pause, or fail.',
+      'Response rule 1\'s body condition "code" must be a JSON pointer, starting with "/".',
+      'Response rule 1\'s body condition "/n" must be a string, number, boolean, or null.',
+      'Response rule 1\'s message must be a JSON pointer, starting with "/".',
+    ]);
+  });
+
+  it('keeps call origins and the endpoints on them, and asks for approval again only when there are some', () => {
+    const endpoints = [...structuredClone(analysisServiceCapability.endpoints), { id: 'cookie', name: 'Cookie', method: 'GET', origin: 'https://cookies.example.test/', path: '/', inputSchema: { type: 'object', properties: {} } }];
+    const read = readWebApiBlockConfig(rawWebApi({ callOrigins: ['https://cookies.example.test/'], endpoints }));
+    if (!read.ok || !read.value.capability) throw new Error(read.ok ? 'No capability.' : read.errors.join(' '));
+    const capability = read.value.capability;
+    expect(capability.callOrigins).toEqual(['https://cookies.example.test']);
+    expect(capability.endpoints.find((endpoint) => endpoint.id === 'cookie')?.origin).toBe('https://cookies.example.test');
+    // A block without call origins is approved as before; one with them names them, and its endpoints' sites.
+    expect(webApiAuthorizationParts(analysisServiceCapability)).not.toHaveProperty('calls');
+    const parts = webApiAuthorizationParts(capability);
+    expect(parts.calls).toEqual(['https://cookies.example.test']);
+    expect((parts.endpoints as Array<{ id: string; origin?: string }>).find((endpoint) => endpoint.id === 'cookie')?.origin).toBe('https://cookies.example.test');
+  });
+
+  it('refuses an endpoint on a site that isn\'t one of the call origins, and a call origin that isn\'t HTTPS', () => {
+    const endpoints = [...structuredClone(analysisServiceCapability.endpoints), { id: 'cookie', name: 'Cookie', method: 'GET', origin: 'https://elsewhere.example.test', path: '/', inputSchema: { type: 'object', properties: {} } }];
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints })))).toEqual(['Endpoint "cookie" is on https://elsewhere.example.test, which isn\'t one of the block\'s call origins.']);
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ callOrigins: ['http://cookies.example.test'] }))))
+      .toEqual(['Call origin "http://cookies.example.test" must use HTTPS (or HTTP on a loopback host).']);
+  });
+
+  it('rejects web API snapshots that could reach other origins or are incomplete', () => {
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ pageUrl: 'http://app.example.test/' })))).toEqual(['The page URL must use HTTPS.']);
+    const endpoints = structuredClone(analysisServiceCapability.endpoints);
+    endpoints[2] = { ...endpoints[2], path: '//evil.test/files' };
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints })))).toContain('Endpoint "profile" must use a same-origin path.');
+    const session = { ...analysisServiceCapability.session, completeUrl: 'https://evil.test/done', probe: { endpointId: 'logout' } };
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ session })))).toEqual([
+      'The completion URL must be on the page origin.',
+      'The session probe must be a GET endpoint of this block.',
+    ]);
+    const undeclared = structuredClone(analysisServiceCapability.endpoints);
+    const getAnalysis = undeclared.findIndex((endpoint) => endpoint.id === 'get-analysis');
+    undeclared[getAnalysis] = { ...undeclared[getAnalysis], inputSchema: { type: 'object', properties: {} } };
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints: undeclared })))).toContain('Endpoint "get-analysis" uses {id} but does not declare it as an input.');
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ mcp: { endpointIds: ['nope'] } })))).toContain('MCP exposes an endpoint that is not defined.');
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ readOrigins: ['http://storage.example.test'] }))))
+      .toContain('Read origin "http://storage.example.test" must use HTTPS (or HTTP on a loopback host).');
+    const served = structuredClone(analysisServiceCapability.endpoints).map((endpoint) => (endpoint.id === 'open-source'
+      ? { ...endpoint, inputSchema: { type: 'object', properties: { id: {}, extra: {} } }, servesDocument: { urlPointer: 'readUrl' } }
+      : endpoint));
+    expect(errorsOf(readWebApiBlockConfig(rawWebApi({ endpoints: served })))).toContain('Endpoint "open-source" serves a document but has no URL pointer.');
+  });
+
+  it('round-trips collections, including fingerprint scopes, and rejects unsafe scopes', () => {
+    const collection = listingCollection([`${ATS_ORIGIN}/acme/jobs`], {
+      patterns: [talentSuiteListingPattern, talentSuiteDetailPattern],
+      key: { kind: 'fields', fields: ['company', 'title'] },
+      ignoredQueryParameters: ['ref'],
+      fields: LISTING_FIELDS.map((field) => (field.id === 'title' ? { ...field, required: true } : field)),
+      startPages: [{ id: 'acme', url: `${ATS_ORIGIN}/acme/jobs`, values: { company: 'Acme' } }],
+    });
+    expect(readCollectionBlockConfig({ schemaVersion: 1, ...structuredClone(collection), mcp: { collect: true } }))
+      .toEqual({ ok: true, value: { collection, mcp: { collect: true } } });
+
+    const broad = { ...talentSuiteListingPattern, appliesTo: [{ target: 'page', host: '*.com' }] };
+    const genericOnly = { ...talentSuiteDetailPattern, appliesTo: [{ target: 'fingerprint', signals: [{ kind: 'form-field', name: '__VIEWSTATE' }] }] };
+    const noLink = { ...talentSuiteListingPattern, id: 'no-link', linkFieldId: undefined };
+    expect(errorsOf(readCollectionBlockConfig({ schemaVersion: 1, ...collection, startPages: [{ id: 'ftp', url: 'ftp://x.test' }], patterns: [broad, genericOnly, noLink] }))).toEqual([
+      '"ftp://x.test" is not an HTTPS start page.',
+      'Pattern "talentsuite-listing": A wildcard host must name a registrable domain, such as "*.example.com".',
+      'Pattern "talentsuite-detail": Add at least one signal specific to this platform.',
+      'Listing pattern "no-link" needs a link field.',
+    ]);
+  });
+
+  it('refuses references that do not resolve: fields, start page values, keys, the output, and pattern commands', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const unknownField = { ...atsDetailPattern, fields: [...atsDetailPattern.fields, { id: 'salary', kind: 'text' }] };
+    const missingCommand = { ...atsDetailPattern, id: 'with-command', itemCommandId: 'open', matcher: { pattern: {}, commands: {} } };
+    expect(errorsOf(readCollectionBlockConfig({
+      schemaVersion: 1,
+      ...listingCollection([acme]),
+      fields: [...LISTING_FIELDS, { id: 'url', label: 'Link', kind: 'text' }, { id: 'title', label: 'Again', kind: 'text' }],
+      startPages: [{ id: 'acme', url: acme, values: { team: 'Platform' } }, { id: 'acme', url: `${ATS_ORIGIN}/globex/jobs` }],
+      patterns: [unknownField, missingCommand],
+      key: { kind: 'field', field: 'requisition' },
+      output: {
+        store: { listPath: '/body/jobs/list', componentName: 'job', recordPath: 'item', fields: { salary: { kind: 'text', path: 'salary.txt' }, rating: { kind: 'text', path: 'rating.txt' } } },
+        // The rating is written by other glue; records only write what they own.
+        policy: { ownedFields: ['salary'] },
+      },
+    }))).toEqual([
+      '"url" is not a field id: use lowercase letters, digits, "-" or "_", and not "url".',
+      'Field id "title" is used twice.',
+      `Start page "${acme}" fills "team", which is not one of the fields.`,
+      'Start page id "acme" is used twice.',
+      `Pattern "${atsDetailPattern.name}" fills "salary", which is not one of the fields.`,
+      `Pattern "${atsDetailPattern.name}" runs command "open", which it does not have.`,
+      'The record key uses "requisition", which is not one of the fields.',
+      'Records may write "salary", which is not one of the fields.',
+    ]);
+  });
+
+  it('reads an output into a table of the document\'s database, with plain names only', () => {
+    const acme = `${ATS_ORIGIN}/acme/jobs`;
+    const store = { kind: 'sql', table: 'jobs', keyColumn: 'job_key', recordColumn: 'record', columns: { title: 'title', company: 'company' }, collectedAtColumn: 'collected_at' };
+    const result = readCollectionBlockConfig({ schemaVersion: 1, ...listingCollection([acme]), output: { store, policy: { onExisting: 'refresh', ownedFields: ['title'] } } });
+    expect(result.ok && result.value.output).toEqual({ store, policy: { onExisting: 'refresh', keepGoodOnFailure: true, ownedFields: ['title'] } });
+
+    expect(errorsOf(readCollectionBlockConfig({
+      schemaVersion: 1,
+      ...listingCollection([acme]),
+      output: { store: { ...store, table: 'jobs; DROP TABLE jobs', columns: { title: 'job title' } }, policy: { ownedFields: ['company'] } },
+    }))).toEqual([
+      'The output\'s column for "title" must be a plain name (letters, digits, and _), not "job title".',
+      'The output owns fields that have no column in the table.',
+      'The output\'s table must be a plain name (letters, digits, and _), not "jobs; DROP TABLE jobs".',
+    ]);
+  });
+
+  it('reads queue blocks with bounded defaults and refuses queue-to-queue targets', () => {
+    const result = readQueueBlockConfig({
+      schemaVersion: 1,
+      queueId: 'evaluate',
+      target: { pluginId: 'galaxy.web-api', method: 'call', args: { capabilityId: 'analysis', endpointId: 'create-analysis' } },
+      config: { concurrency: 99, retry: { maxAttempts: 0 } },
+    });
+    expect(result.ok && result.value.config).toMatchObject({ concurrency: 4, retry: { maxAttempts: 1 } });
+    expect(errorsOf(readQueueBlockConfig({ schemaVersion: 1, queueId: 'q', target: { pluginId: 'galaxy.queue', method: 'enqueue' } })))
+      .toEqual(['A queue cannot target another queue.']);
+  });
+});

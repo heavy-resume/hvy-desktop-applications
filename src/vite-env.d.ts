@@ -22,6 +22,13 @@ declare module 'virtual:hvy-built-in-plugins' {
     webRecords?: HvyPlugin;
     webCommand?: HvyPlugin;
     webMcpTool?: HvyPlugin;
+    galaxyWebApi?: HvyPlugin;
+    galaxyWebCollection?: HvyPlugin;
+    galaxyQueue?: HvyPlugin;
+    galaxyWebProfileContext?: HvyPlugin;
+    galaxySimilarity?: HvyPlugin;
+    galaxySchedule?: HvyPlugin;
+    galaxyFilePicker?: HvyPlugin;
   }>;
   export const builtInPluginById: Readonly<Record<string, HvyPlugin | undefined>>;
 }

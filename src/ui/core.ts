@@ -1,3 +1,4 @@
+import { renderScheduledJobsDialog } from './render-scheduled-jobs';
 import { type AppState } from '../state';
 import { bindClickEvents } from './events-click';
 import { bindControlEvents } from './events-controls';
@@ -6,13 +7,15 @@ import { applyWorkspaceSidebarWidth, bindEscapeEvents, bindWorkspaceSidebarResiz
 import { bindWorkspaceEvents } from './events-workspace';
 import { renderAiSettingsDialog, renderAiSettingsDiscardDialog, renderMcpSettingsDialog, renderMcpSettingsDiscardDialog, syncAiRangeFields } from './render-ai-mcp';
 import { renderAppSettingsDialog, renderAppSettingsDiscardDialog, renderDebugLogDialog, renderHomepageErrorDialog, renderHomepagePickerDialog, renderScriptingReviewDialog } from './render-app-settings';
-import { renderExternalFileChangeDialog, renderAppCloseDialog, renderCloseDocumentDialog, renderCloseDocumentDraftDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
+import { renderExternalFileChangeDialog, renderAppCloseDialog, renderCloseDocumentDialog, renderRecoveryDialog, renderSaveConflictDialog, renderVersionHistorySidebar, renderWorkspaceFileOperationPrompt } from './render-document-dialogs';
 import { renderAboutDialog, renderExportedPdfDialog, renderExportPdfSavePrompt, renderImportDialog, renderImportProgressDialog, renderNewDocumentDialog, updateImportSubmit } from './render-import';
-import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageDeleteDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
+import { renderAddIntegrationPageDialog, renderAddIntegrationProfileDialog, renderIntegrationActionBuilderDialog, renderIntegrationActionDiscardDialog, renderIntegrationActionResultDialog, renderIntegrationCommandBuilderDialog, renderIntegrationCommandDeleteDialog, renderIntegrationCommandRunDialog, renderIntegrationNavigationDialog, renderIntegrationPageDeleteDialog, renderIntegrationPageErrorDialog, renderIntegrationReadyChecksDialog, renderIntegrationRecordDeleteDialog, renderSiteSetupPrepareDialog, renderIntegrationRecordSourceDialog, renderIntegrationsDialog, renderIntegrationStructuredResultDialog, renderIntegrationVaultResetDialog, renderIntegrationWebMcpInvokeDialog, renderIntegrationWebMcpResultDialog, renderIntegrationWebMcpReviewDialog } from './render-integrations';
 import { funnelIcon, gearIcon, renderDocumentTabs, renderModeControls, renderTabStackPopover, renderToolbar } from './render-shell';
 import { renderColorThemeDialog } from './render-theme';
 import { renderDocumentEncryptionDialog, renderDocumentKeyDeleteDialog, renderDocumentKeyImportDialog, renderDocumentKeyManagerDialog } from './render-encryption';
-import { renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameEncryptedFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
+import { renderPluginApprovalBar, renderPluginApprovalDialog } from './render-plugin-approval';
+import { renderBackgroundActivityDialog } from './render-background-activity';
+import { renderArchiveFileDialog, renderDeleteFileDialog, renderDeleteFolderDialog, renderEncryptedAIAccessDialog, renderNewFolderDialog, renderRenameFolderDialog, renderRenameFileDialog, renderSaveAsDialog, renderWorkspaceChatClosePrompt, renderWorkspaceChatDocument, renderWorkspaceFilterDialog, renderWorkspaceTransferDialog } from './render-workspace-dialogs';
 import { bindWorkspaceManagerReordering, renderEmptyState, renderNewWorkspaceDialog, renderWorkspaceInitializationDialog, renderWorkspaceManagerDialog, renderWorkspaces, updateNewWorkspaceSubmit, updateWorkspaceFilterSubmit } from './render-workspaces';
 import { escapeAttr, escapeHtml } from './shared';
 import { UiHandlers } from './types';
@@ -118,7 +121,8 @@ export function renderLeftPanel(state: AppState): void {
 
 export function renderIntegrationQuickViews(state: AppState, expandedPages: ReadonlySet<string>, expandedFilters: ReadonlySet<string>): string {
   const profiles = state.integrationRegistry.profiles;
-  const pages = state.integrationRegistry.integrations.flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
+  // Pages in a site setup belong to that document, not to the sidebar.
+  const pages = state.integrationRegistry.integrations.filter((integration) => !integration.siteSetup).flatMap((integration) => integration.pages.map((page) => ({ integration, page })));
   if (pages.length === 0) return '<div class="empty-panel">Fetch data and trigger actions on web pages. Configure to begin.</div>';
   return `<div class="integration-quick-views">${pages.map(({ integration, page }) => {
     const quickViewId = `${integration.id}:${page.id}`;
@@ -154,7 +158,8 @@ export function renderDocumentControls(state: AppState): void {
     <header class="document-toolbar">
       ${renderToolbar(state)}
     </header>
-    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? escapeHtml(state.error) : ''}</div>`;
+    ${renderPluginApprovalBar(state)}
+    <div class="error-slot${state.error ? ' has-error' : ''}">${state.error ? `<span class="error-slot-message">${escapeHtml(state.error)}</span><button type="button" class="hvy-galaxy-button icon-button error-slot-close" data-action="dismiss-error" title="Dismiss" aria-label="Dismiss">&times;</button>` : ''}</div>`;
   documentModeControlsRoot().innerHTML = state.document && !workspaceChatActive ? renderModeControls(state.document.mode, state.document.readOnly, state.document.metaOpen, state.document.hiddenFromAI) : '';
   const mount = hvyMountRoot();
   mount.classList.toggle('hvy-vscode-has-mode-controls', Boolean(state.document && !workspaceChatActive));
@@ -244,6 +249,8 @@ export function renderModals(state: AppState): void {
   }
   const integrationDetailScrollTop = root.querySelector<HTMLElement>('.integration-detail')?.scrollTop ?? 0;
   const integrationListScrollTop = root.querySelector<HTMLElement>('.integration-list')?.scrollTop ?? 0;
+  // Set up this site keeps its place as its steps report back (Test's results arrive at the bottom).
+  const siteSetupScrollTop = root.querySelector<HTMLElement>('.site-setup-dialog')?.scrollTop ?? 0;
   const currentIntegrationActionBuilderContent = root.querySelector<HTMLElement>('.integration-action-builder-content');
   const currentIntegrationActionBuilderDialog = root.querySelector<HTMLElement>('.integration-action-builder-dialog');
   if (currentIntegrationActionBuilderContent && state.integrationActionBuilderStep === 'define') {
@@ -274,6 +281,7 @@ export function renderModals(state: AppState): void {
     ${renderIntegrationPageErrorDialog(state)}
     ${renderIntegrationNavigationDialog(state)}
     ${renderIntegrationReadyChecksDialog(state)}
+    ${renderSiteSetupPrepareDialog(state)}
     ${renderIntegrationPageDeleteDialog(state)}
     ${renderAddIntegrationProfileDialog(state)}
     ${renderIntegrationRecordSourceDialog(state)}
@@ -296,6 +304,7 @@ export function renderModals(state: AppState): void {
     ${renderHomepageErrorDialog(state)}
     ${renderHomepagePickerDialog(state)}
     ${renderScriptingReviewDialog(state)}
+    ${renderScheduledJobsDialog(state)}
     ${renderAiSettingsDialog(state)}
     ${renderAiSettingsDiscardDialog(state)}
     ${renderMcpSettingsDialog(state)}
@@ -305,16 +314,18 @@ export function renderModals(state: AppState): void {
       ${renderDocumentKeyManagerDialog(state)}
       ${renderDocumentKeyDeleteDialog(state)}
       ${renderDocumentEncryptionDialog(state)}
+      ${renderPluginApprovalDialog(state)}
+      ${renderBackgroundActivityDialog(state)}
     ${renderRecoveryDialog(state)}
     ${renderExternalFileChangeDialog(state)}
     ${renderTabStackPopover(state)}
     ${renderCloseDocumentDialog(state)}
-    ${renderCloseDocumentDraftDialog(state)}
     ${renderWorkspaceFileOperationPrompt(state)}
     ${renderSaveConflictDialog(state)}
     ${renderAppCloseDialog(state)}
     ${renderRenameFileDialog(state)}
-    ${renderRenameEncryptedFolderDialog(state)}
+    ${renderRenameFolderDialog(state)}
+    ${renderArchiveFileDialog(state)}
     ${renderDeleteFileDialog(state)}
     ${renderDeleteFolderDialog(state)}
     ${renderWorkspaceTransferDialog(state)}
@@ -328,6 +339,8 @@ export function renderModals(state: AppState): void {
   if (documentKeyList) documentKeyList.scrollTop = documentKeyListScrollTop;
   if (integrationDetail) integrationDetail.scrollTop = integrationDetailScrollTop;
   if (integrationList) integrationList.scrollTop = integrationListScrollTop;
+  const siteSetupDialog = root.querySelector<HTMLElement>('.site-setup-dialog');
+  if (siteSetupDialog) siteSetupDialog.scrollTop = siteSetupScrollTop;
   if (integrationActionBuilderContent) integrationActionBuilderContent.scrollTop = state.integrationActionBuilderStep === 'define' ? integrationActionBuilderScrollTop : 0;
   if (integrationActionBuilderDialog) integrationActionBuilderDialog.scrollTop = state.integrationActionBuilderStep === 'define' ? integrationActionBuilderDialogScrollTop : 0;
   if (state.aiSettingsDialogOpen) {

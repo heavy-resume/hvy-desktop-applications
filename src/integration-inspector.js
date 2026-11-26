@@ -1,9 +1,17 @@
 (() => {
   if (window.top !== window || window.__hvyGalaxyInspector) return;
+  // Every message to Galaxy carries the browser's token, which the host puts here when it injects this script (as a
+  // CSRF token): hosts take only messages with it, so a frame the page embeds cannot speak for the inspector. The page's
+  // own scripts can see it, so hosts take only what the page says this way, never what they report themselves.
+  const MESSAGE_TOKEN = '__HVY_GALAXY_MESSAGE_TOKEN__';
+  const messageUrl = (path) => `hvy-integration://${path}?t=${MESSAGE_TOKEN}`;
 
   const ids = ['hvy-galaxy-inspector-shield', 'hvy-galaxy-existing-matches', 'hvy-galaxy-inspector-scope', 'hvy-galaxy-inspector-highlight', 'hvy-galaxy-inspector-picker', 'hvy-galaxy-inspector-status', 'hvy-galaxy-pattern-matches', 'hvy-galaxy-ready-check-matches'];
   let active = false;
   let pickingPaused = false;
+  // While picking: the timer that looks for a check that you're human, and whether picking paused for the one showing.
+  let humanCheckTimer = null;
+  let humanCheckPaused = false;
   let inspectionKind = 'target';
   let highlighted = null;
   let lastDiagnostics = null;
@@ -12,51 +20,44 @@
   let scopeSnapshot = null;
   let scopeAnchorElement = null;
   let inspectionPattern = null;
+  // Showing how a pattern matches the page (Show matching), to look at only: the boxes, and no picking.
+  let matchingView = false;
   let liveMinimumConfidence = null;
   let matchOverlayCleanup = null;
   let selectionOverlayCleanup = null;
   let targetCollection = null;
+  // While picking fields: takes back the last one picked (Escape).
+  let undoLastPick = null;
   let commandRecorder = null;
   let commandRecordElements = null;
+  // Picking one of a pattern's records (a site setup's example item: a row of the list): its matches, boxed, and what
+  // to say when a pick is outside them.
+  let recordChoice = null;
+  // A range field being picked: where it starts, and whether the start is part of it. The next pick is where it ends.
+  let rangeStart = null;
+  let rangeStatus = null;
+  // Changing one boundary of a range field picked before: the end it keeps while its start is picked again.
+  let rangeKeptEnd = null;
+  let rangeEditing = false;
+  // Range mode (Use range): a click picks where a range starts, then where it ends, rather than a field: the picker's
+  // row clicked is the boundary. `rangeModeChanged` updates its button.
+  let rangeMode = false;
+  let rangeModeChanged = null;
+  const RANGE_MODE_STATUS = 'Pick where the range starts · Esc leaves range mode';
   let toolbarControl = null;
   let inspectionContext = null;
   let captureSequence = 0;
-  let browserChromeHost = null;
-  const nativePublish = typeof window.__hvyGalaxyPublish === 'function' ? window.__hvyGalaxyPublish : null;
+  const host = window.__hvyGalaxyHost || {};
   const capturedElements = new Map();
-  const observedStructuredUrls = new Map();
-  const xhrStructuredUrls = new WeakMap();
-
-  const observeStructuredUrl = (value, contentType = '') => {
-    try {
-      const url = new URL(value instanceof Request ? value.url : String(value), location.href);
-      if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
-      const normalizedType = contentType.toLowerCase();
-      const kind = normalizedType.includes('json') ? 'json-api' : normalizedType.includes('atom') ? 'atom' : normalizedType.includes('rss') || normalizedType.includes('xml') ? 'rss' : null;
-      if (kind) observedStructuredUrls.set(url.href, kind);
-    } catch (_) {}
-  };
-
-  const pageFetch = window.fetch.bind(window);
-  window.fetch = (input, init) => pageFetch(input, init).then((response) => {
-    observeStructuredUrl(response.url || input, response.headers.get('content-type') || '');
-    return response;
+  // The page's own requests (fetch and XMLHttpRequest), as the browser times them, for the APIs it reads: those from
+  // before this was here, and each one after, as the browser's buffer of them fills (250). Each with its type where the
+  // browser reports one (Chromium). Nothing of the page's is replaced to see them.
+  const timedRequests = new Map();
+  const timeRequests = (entries) => entries.forEach((entry) => {
+    if (['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) timedRequests.set(entry.name, entry.contentType || '');
   });
-  const pageXhrOpen = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    if (String(method).toUpperCase() === 'GET') {
-      try { xhrStructuredUrls.set(this, new URL(String(url), location.href).href); } catch (_) {}
-    }
-    return pageXhrOpen.call(this, method, url, ...rest);
-  };
-  const pageXhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.send = function(...args) {
-    this.addEventListener('load', () => {
-      const url = xhrStructuredUrls.get(this);
-      if (url) observeStructuredUrl(url, this.getResponseHeader('content-type') || '');
-    }, { once: true });
-    return pageXhrSend.apply(this, args);
-  };
+  timeRequests(performance.getEntriesByType('resource'));
+  new PerformanceObserver((list) => timeRequests(list.getEntries())).observe({ type: 'resource' });
 
   const composedParent = (element) => {
     if (element?.parentElement) return element.parentElement;
@@ -116,6 +117,64 @@
     return { directText, accessibleName: accessibleName.trim() };
   };
 
+  // Ported from the Heavy Resume extension's description picker (src/content/dom.ts visible / extractDescription), so
+  // a field picked as a container reads the way the extension reads a job description.
+  const renderedVisibly = (element) => {
+    for (let current = element; current; current = current.parentElement ?? current.getRootNode?.().host ?? null) {
+      const style = getComputedStyle(current);
+      if (current.hasAttribute('hidden') || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true' || style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    return true;
+  };
+
+  /**
+   * Visible text only, keeping paragraph, list, and heading breaks; no scripts, hidden sections, or form controls. With a
+   * range, only the text inside it: a range field reads everything between its start and end, in page order.
+   */
+  const readableText = (element, range = null) => {
+    const parts = [];
+    const visit = (node) => {
+      if (range && !range.intersectsNode(node)) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        parts.push(node.textContent ?? '');
+        return;
+      }
+      if (!(node instanceof Element) || !renderedVisibly(node) || node.matches('script,style,noscript,input,textarea,select,button,svg')) return;
+      if (/^(P|DIV|SECTION|ARTICLE|LI|H[1-6]|BR)$/.test(node.tagName)) parts.push('\n');
+      node.childNodes.forEach(visit);
+      if (/^(P|DIV|SECTION|ARTICLE|LI|H[1-6])$/.test(node.tagName)) parts.push('\n');
+    };
+    visit(range ? range.commonAncestorContainer : element);
+    return parts.join('').replace(/[\t ]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 40000);
+  };
+
+  // A range field's boundaries: the end comes after the start and is not inside it, so whatever is between them is read.
+  const followsStart = (start, element) => {
+    const position = start.compareDocumentPosition(element);
+    return Boolean(position & Node.DOCUMENT_POSITION_FOLLOWING) && !(position & Node.DOCUMENT_POSITION_CONTAINED_BY);
+  };
+  const textRangeBetween = (start, end, includeStart, includeEnd) => {
+    const range = document.createRange();
+    if (includeStart) range.setStartBefore(start);
+    else range.setStartAfter(start);
+    if (includeEnd) range.setEndAfter(end);
+    else range.setEndBefore(end);
+    return range;
+  };
+
+  const previewText = (text, fromEnd = false) => {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    if (compact.length <= 120) return compact;
+    return fromEnd ? `…${compact.slice(-119)}` : `${compact.slice(0, 119)}…`;
+  };
+
+  // Text in one line of at most 120 characters: whole, or its start and end with the middle left out.
+  const middlePreview = (text) => {
+    const compact = text.replace(/\s+/g, ' ').trim();
+    if (compact.length <= 120) return compact;
+    return `${compact.slice(0, 60).trimEnd()} … ${compact.slice(-59).trimStart()}`;
+  };
+
   const visibleText = (element) => {
     const text = (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
     if (text) return text;
@@ -123,8 +182,17 @@
     return [pseudo.before.text, pseudo.after.text].filter(Boolean).join(' ');
   };
 
+  // How a range field reads in the record type builder: 'Starts after "Job description" · Ends before "Apply now" · 3,812 characters'.
+  const boundaryLabel = (element) => {
+    const text = visibleText(element);
+    return text.length > 40 ? `${text.slice(0, 39)}…` : text || element.tagName.toLowerCase();
+  };
+  const rangeSummary = (start, end, includeStart, includeEnd, text) => `${includeStart ? 'Starts at' : 'Starts after'} “${boundaryLabel(start)}” · ${includeEnd ? 'Ends at' : 'Ends before'} “${boundaryLabel(end)}” · ${text.length.toLocaleString()} characters`;
+
+  // An image, or what holds only an image (a link around a logo): an element with text of its own around an image (the
+  // page around a company's logo) is that text, not the image.
   const imageFor = (element) => {
-    const image = element.matches('img') ? element : element.querySelector('img');
+    const image = element.matches('img') ? element : (element.innerText || element.textContent || '').trim() ? null : element.querySelector('img');
     if (image instanceof HTMLImageElement) {
       return {
         url: (image.currentSrc || image.src).slice(0, 4000),
@@ -337,7 +405,18 @@
     return elements;
   };
 
+  // While a pattern is matched, each element's shape is taken once: matching compares every candidate box, and every
+  // element inside each, and nested boxes share what is inside them, so on a large page the same elements were measured
+  // over and over (seconds, in WebKit, on a board's results page). The page does not change while it is matched.
+  let matchingShapes = null;
   const shapeSignature = (element) => {
+    const known = matchingShapes?.get(element);
+    if (known) return known;
+    const shape = measureShape(element);
+    matchingShapes?.set(element, shape);
+    return shape;
+  };
+  const measureShape = (element) => {
     const descendants = deepElements(element, 300);
     const children = [...element.children];
     const ancestors = [];
@@ -651,6 +730,17 @@
     return sharedContainerScore * 0.8 + proximity(expectedDepthSpread, matchedDepthSpread, 3) * 0.2;
   };
 
+  // A check that you're human, as sites show them: Cloudflare's (its challenge page and Turnstile), hCaptcha, and reCAPTCHA,
+  // when it can be seen (not reCAPTCHA's invisible badge).
+  const HUMAN_CHECKS = 'iframe[src*="challenges.cloudflare.com"], iframe[src*="hcaptcha.com"], iframe[src*="/recaptcha/"], #challenge-form, #challenge-stage, .cf-turnstile, .h-captcha, .g-recaptcha';
+  const humanCheckOnPage = () => [...document.querySelectorAll(HUMAN_CHECKS)].some((element) => {
+    if (element instanceof HTMLIFrameElement && /[?&]size=invisible\b/.test(element.src)) return false;
+    if (element.getAttribute('data-size') === 'invisible') return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden';
+  });
+  const HUMAN_CHECK_STATUS = 'The page is checking you’re human · finish it, then Resume picking';
+
   const cssEscape = (value) => window.CSS?.escape ? window.CSS.escape(value) : value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
   const cssPath = (element) => {
     const parts = [];
@@ -745,6 +835,15 @@
     return candidates;
   };
 
+  // What a form control is set to, as a person sees it: a field's text, whether a box is checked, a list's choice. Null
+  // for anything else, whose text is what it shows. Ready checks (and a list's anchors) compare it.
+  const controlState = (element) => {
+    if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) return element.checked ? 'Checked' : 'Not checked';
+    if (element instanceof HTMLSelectElement) return element.selectedOptions[0]?.textContent?.trim() ?? '';
+    if (element instanceof HTMLTextAreaElement || (element instanceof HTMLInputElement && ['', 'text', 'search', 'email', 'tel', 'url', 'number'].includes(element.type))) return element.value;
+    return null;
+  };
+
   const snapshot = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
     const rect = element.getBoundingClientRect();
@@ -764,6 +863,7 @@
         directText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : directText.slice(0, 300),
         accessibleName: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : accessibleName.slice(0, 300),
         descendantText: inspectionKind === 'parent' || inspectionKind === 'scope' ? '' : (element.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 800),
+        ...(inspectionKind !== 'parent' && inspectionKind !== 'scope' && controlState(element) !== null ? { controlState: controlState(element) } : {}),
         ...(inspectionKind === 'scope' ? { scopeLabel: scopeIdentity(element, scopeAnchorElement).label } : {}),
         cssPath: cssPath(element).slice(0, 600),
         attributes: Object.fromEntries(usefulAttributes
@@ -783,109 +883,86 @@
     };
   };
 
-  const publish = (value) => {
-    if (nativePublish) {
-      nativePublish(value);
-      return;
-    }
+  // A message to Galaxy, through the host's own channel where it gives one (`__hvyGalaxyHost`: Electron's preload, in the
+  // isolated world this runs in, out of the page's reach), or else as a navigation carrying the token, which the page
+  // can see.
+  const sendMessage = (path, value) => {
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     let binary = '';
     bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
     const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = `hvy-integration://inspection/${encoded}`;
+    window.location.href = messageUrl(`${path}/${encoded}`);
+  };
+
+  const publish = (value) => {
+    if (host.publish) host.publish(value);
+    else sendMessage('inspection', value);
+  };
+
+  // With the browser's own toolbar, what picking says and its buttons are shown there, off the page, so they cover
+  // nothing on it: the status panel is built as usual, kept off the page, and copied to the toolbar each time it changes.
+  // The toolbar's buttons click the panel's (by `data-toolbar-id`). A step that takes typing (a sample value, a choice
+  // of option) shows the panel on the page while it lasts, beside what it is typed into.
+  let toolbarSession = 0;
+  const mirrorStatusToToolbar = (status, statusText) => {
+    const session = ++toolbarSession;
+    let pending = 0;
+    const sync = () => {
+      pending = 0;
+      if (!active || session !== toolbarSession) return;
+      const takesTyping = Boolean(status.querySelector('textarea,input,select,[data-command-recorder-input]'));
+      if (takesTyping && !status.isConnected) document.documentElement.append(status);
+      if (!takesTyping && status.isConnected) status.remove();
+      publishToolbarState({
+        active: true,
+        status: statusText.textContent,
+        buttons: [...status.querySelectorAll('button[data-toolbar-id]:not([data-toolbar-pill])')].filter((button) => !button.hidden).map((button) => ({
+          id: button.dataset.toolbarId,
+          label: button.textContent,
+          primary: button.dataset.toolbarPrimary === 'true',
+          disabled: button.disabled,
+        })),
+        // A site setup's fields, as pills: filled once picked; the others answer which field a pick is, while it is asked.
+        fields: [...status.querySelectorAll('button[data-toolbar-pill]')].map((pill) => ({
+          id: pill.dataset.toolbarId,
+          label: pill.textContent,
+          picked: pill.dataset.toolbarPill === 'picked',
+          disabled: pill.disabled,
+        })),
+      });
+    };
+    new MutationObserver(() => { if (!pending) pending = setTimeout(sync, 0); })
+      .observe(status, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'data-toolbar-pill'] });
+    toolbarControl = (id) => status.querySelector(`button[data-toolbar-id="${CSS.escape(String(id))}"]`)?.click();
+    sync();
   };
 
   const publishToolbarState = (value) => {
-    if (typeof window.__hvyGalaxyToolbarPublish === 'function') {
-      window.__hvyGalaxyToolbarPublish(value);
-      return;
-    }
-    const bytes = new TextEncoder().encode(JSON.stringify(value));
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    const encoded = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    window.location.href = `hvy-integration://toolbar-state/${encoded}`;
+    if (host.toolbarState) host.toolbarState(value);
+    else sendMessage('toolbar-state', value);
   };
 
-  const browserChromeNavigate = (value) => {
-    const bytes = new TextEncoder().encode(value);
-    let binary = '';
-    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
-    window.location.href = `hvy-integration://navigate/${btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')}`;
-  };
-
-  const installBrowserChrome = (options = {}) => {
-    if (browserChromeHost) {
-      if (!browserChromeHost.isConnected) document.documentElement.append(browserChromeHost);
-      return;
-    }
-    const host = document.createElement('div');
-    browserChromeHost = host;
-    host.id = 'hvy-galaxy-browser-chrome';
-    host.setAttribute('popover', 'manual');
-    host.style.cssText = 'all:initial;position:fixed;inset:0 0 auto 0;height:52px;z-index:2147483647;display:block';
-    const shadow = host.attachShadow({ mode: 'open' });
-    shadow.innerHTML = `<style>
-      :host{color-scheme:dark}*{box-sizing:border-box}.bar{height:52px;padding:7px 10px;display:flex;align-items:center;gap:7px;background:#17191e;border-bottom:1px solid #555b64;color:#f4f4f5;font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 2px 8px #0008}
-      button{height:36px;min-width:36px;padding:0 10px;border:1px solid #5b6069;border-radius:7px;background:#23262d;color:inherit;font:inherit;cursor:pointer}button:hover{background:#30343d}button:focus-visible,input:focus-visible{outline:2px solid #ff5d47;outline-offset:1px}.address{height:36px;min-width:0;flex:1;display:flex;align-items:center;gap:8px;padding:0 11px;border:1px solid #5b6069;border-radius:8px;background:#0f1115}.security{display:flex;align-items:center;gap:6px;white-space:nowrap}.security[data-secure="true"]{color:#9fd7b2}.security[data-allowed="false"]{color:#ffb19f}.host{font-weight:650}.url{min-width:0;flex:1;border:0;background:transparent;color:#dadce1;font:inherit;outline:0}.brand{font-weight:700;white-space:nowrap}.close{font-size:20px;line-height:1}slot[name="inspection"]{display:contents}
-    </style><div class="bar"><span class="brand">HVY Galaxy</span><button data-command="back" title="Back" aria-label="Back">←</button><button data-command="forward" title="Forward" aria-label="Forward">→</button><button data-command="reload" title="Reload" aria-label="Reload">↻</button><form class="address"><span class="security"><span class="lock"></span><span class="host"></span></span><input class="url" aria-label="Address"></form><slot name="inspection"><button data-command="inspect" title="Inspect data">Inspect</button></slot><button class="close" data-command="close" title="Close" aria-label="Close">×</button></div>`;
-    let reservedBody = null;
-    let reservedPadding = '';
-    const reservePageSpace = () => {
-      if (!document.body) return;
-      if (reservedBody !== document.body) {
-        reservedBody = document.body;
-        const originalPadding = getComputedStyle(document.body).paddingTop || '0px';
-        reservedPadding = `calc(${originalPadding} + 52px)`;
-      }
-      document.body.style.setProperty('padding-top', reservedPadding, 'important');
-      document.body.style.setProperty('box-sizing', 'border-box', 'important');
+  // Where the page is, told to the host as it changes without a page load (a single-page site such as Gmail going to
+  // another message), so the toolbar's address follows it. A host with its own way to know (Electron's in-page
+  // navigation event) has no location method, and is not told; the host takes only an address on the page's own origin.
+  if (host.location || !host.publish) {
+    let reportedLocation = window.location.href;
+    const followLocation = () => {
+      if (window.location.href === reportedLocation) return;
+      reportedLocation = window.location.href;
+      if (host.location) host.location(reportedLocation);
+      else sendMessage('location', reportedLocation);
     };
-    const mount = () => {
-      if (!host.isConnected) document.documentElement.append(host);
-      if (typeof host.showPopover === 'function') {
-        try { host.showPopover(); } catch (_) { host.removeAttribute('popover'); }
-      } else {
-        host.removeAttribute('popover');
-      }
-      reservePageSpace();
-    };
-    mount();
-    document.documentElement.style.setProperty('scroll-padding-top', '52px', 'important');
-    const allowedOrigins = new Set(options.allowedOrigins || []);
-    const update = () => {
-      const secure = location.protocol === 'https:';
-      const allowed = !allowedOrigins.size || allowedOrigins.has(location.origin);
-      const security = shadow.querySelector('.security');
-      security.dataset.secure = String(secure);
-      security.dataset.allowed = String(allowed);
-      shadow.querySelector('.lock').textContent = secure ? '●' : '▲';
-      shadow.querySelector('.host').textContent = location.hostname || location.protocol;
-      const input = shadow.querySelector('.url');
-      if (shadow.activeElement !== input) input.value = location.href;
-      security.title = `${secure ? 'Encrypted HTTPS connection' : 'Connection is not encrypted'} · ${allowed ? 'Allowed page origin' : 'Outside configured page origins'}`;
-    };
-    shadow.addEventListener('click', (event) => {
-      const command = event.target.closest?.('[data-command]')?.dataset.command;
-      if (command) window.location.href = `hvy-integration://browser/${command}`;
-    });
-    shadow.querySelector('form').addEventListener('submit', (event) => {
-      event.preventDefault();
-      let value = shadow.querySelector('.url').value.trim();
-      if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = `https://${value}`;
-      browserChromeNavigate(value);
-    });
-    update();
-    window.addEventListener('popstate', update);
-    setInterval(() => {
-      mount();
-      update();
-    }, 500);
-  };
+    window.addEventListener('hashchange', followLocation);
+    window.addEventListener('popstate', followLocation);
+    // A page's own history.pushState tells no one: looked at now and then.
+    setInterval(followLocation, 1000);
+  }
 
   const snapshotByteLength = (element) => new TextEncoder().encode(JSON.stringify(snapshot(element))).byteLength;
 
-  const highlight = (element) => {
+  // `reading`: a field read from part of the element, shown as such: its label, and the children it leaves out, struck out.
+  const highlight = (element, textRange = null, reading = null) => {
     highlighted = element;
     let box = document.getElementById('hvy-galaxy-inspector-highlight');
     if (!box) {
@@ -894,7 +971,7 @@
       box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:3px solid #e0563f;background:#e0563f2b;box-sizing:border-box;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;box-shadow:0 0 0 1px #fff8 inset';
       document.documentElement.append(box);
     }
-    const rect = element.getBoundingClientRect();
+    const rect = textRange ? textRange.getBoundingClientRect() : element.getBoundingClientRect();
     const left = Math.max(2, rect.left);
     const top = Math.max(2, rect.top);
     const right = Math.min(innerWidth - 2, rect.right);
@@ -905,12 +982,42 @@
       width: `${Math.max(2, right - left)}px`,
       height: `${Math.max(2, bottom - top)}px`,
     });
-    box.textContent = `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`;
+    box.textContent = reading?.label ?? (textRange
+      ? `Range · ${readableText(null, textRange).length.toLocaleString()} characters`
+      : `${targetCollection ? 'Add field · ' : ''}${element.tagName.toLowerCase()}`);
     box.style.padding = '3px 5px';
+    // What the field leaves out, struck out where it is (inside the box, so it goes when the box does).
+    for (const excluded of reading?.excluded ?? []) {
+      const area = excluded.getBoundingClientRect();
+      if (!area.width || !area.height) continue;
+      const strike = document.createElement('div');
+      strike.dataset.inspectorExcluded = 'true';
+      // Placed from inside the box's border (3px), which is where its children start.
+      strike.style.cssText = `position:absolute;left:${area.left - left - 3}px;top:${area.top - top - 3}px;width:${area.width}px;height:${area.height}px;box-sizing:border-box;border:2px dashed #e0563f;background:linear-gradient(to bottom,transparent calc(50% - 1px),#e0563f calc(50% - 1px),#e0563f calc(50% + 1px),transparent calc(50% + 1px)),#e0563f22;pointer-events:none`;
+      box.append(strike);
+    }
+  };
+
+  // The elements under a point that hit testing skips (`pointer-events: none`, as a card its title link covers sets on its
+  // text, so a click anywhere opens the link): from an element it found, down through the child whose box holds the
+  // point (the last such, painted on top), innermost first. Hit testing gives the innermost first, so a walk stops at an
+  // element one before it reached (`seen`): an outer element's walk ends at once, rather than measuring the same path again.
+  const elementsWithinAt = (element, x, y, seen) => {
+    const found = [];
+    for (let node = element; node;) {
+      node = [...node.children].reverse().find((child) => {
+        const rect = child.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      }) ?? null;
+      if (!node || seen.has(node)) break;
+      found.unshift(node);
+    }
+    return found;
   };
 
   const elementsBehindInspector = (x, y) => {
     const visitedRoots = new Set();
+    const seen = new Set();
     const collect = (root) => {
       if (visitedRoots.has(root)) return [];
       visitedRoots.add(root);
@@ -918,7 +1025,9 @@
       const result = [];
       hits.forEach((element) => {
         if (element.shadowRoot) result.push(...collect(element.shadowRoot));
-        result.push(element);
+        const within = elementsWithinAt(element, x, y, seen);
+        for (const found of [...within, element]) seen.add(found);
+        result.push(...within, element);
       });
       return result;
     };
@@ -975,7 +1084,7 @@
       }
     }
     const directlyRendersImage = (element) => element.matches('img') || getComputedStyle(element).backgroundImage !== 'none';
-    const candidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
+    const elementCandidates = [...new Set([...imagesBehindTarget, ...hitStack, ...chain])]
       .filter((element) => inspectionKind === 'parent' ? isParentCandidate(element) : isMeaningful(element))
       .filter((element) => inspectionKind !== 'target' || !(scopeElement || scopeSelector || scopeSnapshot) || composedContains(resolvedScope(), element))
       .sort((left, right) => Number(directlyRendersImage(right)) - Number(directlyRendersImage(left)))
@@ -991,6 +1100,23 @@
         return all.findIndex((candidate) => signatureFor(candidate) === signature) === index;
       })
       .slice(0, 10);
+    // A field can also be a section holding its text in children, such as a job description of paragraphs and lists, as
+    // the Heavy Resume extension's description picker offers: enclosing elements inside the record, without repeating
+    // text already offered.
+    const offeredText = new Set(elementCandidates.map((element) => readableText(element).replace(/\s+/g, ' ')));
+    const containerCandidates = inspectionKind !== 'target' || commandRecorder ? [] : chain
+      .filter((element) => !elementCandidates.includes(element) && !element.matches('html,body,script,style,noscript,svg,iframe,frame,input,textarea,select,button'))
+      .filter((element) => !(scopeElement || scopeSelector || scopeSnapshot) || (element !== resolvedScope() && composedContains(resolvedScope(), element)))
+      .filter((element) => {
+        const text = readableText(element).replace(/\s+/g, ' ');
+        if (text.length < 10 || offeredText.has(text)) return false;
+        offeredText.add(text);
+        return true;
+      })
+      .slice(0, 4);
+    const candidates = [...elementCandidates, ...containerCandidates]
+      .filter((element) => !rangeStart || followsStart(rangeStart.element, element))
+      .filter((element) => !rangeKeptEnd || followsStart(element, rangeKeptEnd.element));
     const describe = (element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -1023,7 +1149,19 @@
     const heading = document.createElement('div');
     heading.textContent = commandRecorder
       ? inspectionKind === 'parent' ? 'Choose the record for this command' : 'Choose the interaction target'
-      : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item' : 'Choose data inside the selected parent';
+      : inspectionKind === 'scope' ? 'Choose the section that should contain matching items' : inspectionKind === 'parent' ? 'Choose the parent containing one complete item'
+        : rangeStart ? candidates.length ? 'Choose where the range ends' : 'Pick something after the start'
+          : rangeKeptEnd ? candidates.length ? 'Choose where the range starts' : 'Pick something before the end'
+            : rangeMode ? 'Choose where the range starts' : 'Choose data inside the selected parent';
+    // A field can be a range: everything from one element to another, for text split across sections with no container
+    // of its own. In range mode (or changing a range's boundary), clicking a row starts the range there, or ends it; with
+    // the checkbox ticked, it starts after the row, or ends before it.
+    const pickingRange = inspectionKind === 'target' && !commandRecorder && (rangeMode || rangeEditing);
+    const exclude = document.createElement('input');
+    exclude.type = 'checkbox';
+    // Where the range is: its end once its start is picked, its start otherwise (a start picked again keeps its end).
+    const pickingEnd = Boolean(rangeStart);
+    const rangeTo = (element, includeEnd) => textRangeBetween(rangeStart.element, element, rangeStart.includeStart, includeEnd);
     heading.style.cssText = 'padding:7px 8px;font-weight:700;border-bottom:1px solid #c5cec8';
     picker.append(heading);
     candidates.forEach((element) => {
@@ -1038,14 +1176,31 @@
         ? `${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${inspectionKind === 'scope' ? scopeIdentity(element, scopeAnchorElement).label || structuralLabel : structuralLabel}`
         : `${image ? '🖼️ ' : ''}${element.tagName.toLowerCase()}${element.getAttribute('role') ? `[${element.getAttribute('role')}]` : ''} — ${(completeText || directText || accessibleName || (image ? image.alt || 'image' : 'control')).slice(0, 100)}`;
       choice.style.cssText = 'display:block;width:100%;padding:8px;border:0;border-bottom:1px solid #dde3df;background:transparent;color:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer';
+      if (!parentLike && !commandRecorder && !isMeaningful(element)) {
+        // A section holding its text in children: its length, and its text, its middle left out when long, so where it
+        // starts and ends both show.
+        const text = readableText(element);
+        const lines = [
+          [`${element.tagName.toLowerCase()}${structuralLabel === 'container' ? '' : structuralLabel} · ${text.length.toLocaleString()} characters`, 'font-weight:700'],
+          [middlePreview(text), 'color:#31413e'],
+        ];
+        choice.replaceChildren(...lines.map(([line, style]) => {
+          const row = document.createElement('span');
+          row.textContent = line;
+          row.style.cssText = `display:block;overflow:hidden;text-overflow:ellipsis;${style}`;
+          return row;
+        }));
+      }
+      choice.dataset.pickerChoice = 'true';
       choice.addEventListener('mouseenter', () => {
-        picker.querySelectorAll('button').forEach((button) => { button.style.background = 'transparent'; });
+        picker.querySelectorAll('[data-picker-choice]').forEach((button) => { button.style.background = 'transparent'; });
         choice.style.background = '#dce8e1';
-        highlight(element);
+        highlight(element, rangeStart ? rangeTo(element, !exclude.checked) : null);
       });
-      choice.addEventListener('click', () => {
+      // Picked, whole or (`reading`) one part of its text or its own text alone.
+      const pick = (reading = {}) => {
         if (inspectionKind === 'parent') scopeElement = element;
-        const result = snapshot(element);
+        const result = { ...snapshot(element), ...reading };
         if (inspectionKind === 'parent' && inspectionPattern) {
           result.suggestedTargets = suggestTargetsForParent(element, inspectionPattern);
         }
@@ -1061,9 +1216,59 @@
         }
         publish(result);
         window.__hvyGalaxyInspector.stop();
+      };
+      choice.addEventListener('click', () => {
+        if (pickingRange) {
+          if (pickingEnd) finishRange(element, !exclude.checked);
+          else beginRange(element, !exclude.checked);
+          return;
+        }
+        pick();
       });
       picker.append(choice);
+      // A field can be part of the element's text: a label in a line of them, or its own text without its children's.
+      if (inspectionKind === 'target' && !commandRecorder && !pickingRange) {
+        const readings = [];
+        const own = offeredOwnText(element);
+        if (own) readings.push([`Text: ${own}`, { ownText: true, textPreview: own }]);
+        const parts = offeredTextParts(element);
+        // The last part counts from the end, so a row without an earlier part still reads it.
+        parts.forEach((part, index) => readings.push([`Part ${index + 1} of ${parts.length}${index === parts.length - 1 ? ' (last)' : ''}: ${part}`, { textPart: { index: index === parts.length - 1 ? -1 : index, count: parts.length }, textPreview: part }]));
+        for (const [label, reading] of readings) {
+          const partChoice = document.createElement('button');
+          partChoice.type = 'button';
+          partChoice.textContent = label;
+          partChoice.dataset.pickerChoice = 'true';
+          partChoice.dataset.pickerPart = 'true';
+          partChoice.style.cssText = `${choice.style.cssText};padding-left:24px;color:#31413e`;
+          // Boxed as it reads: the part's own text, or the element with what its text leaves out struck out.
+          partChoice.addEventListener('mouseenter', () => {
+            picker.querySelectorAll('[data-picker-choice]').forEach((button) => { button.style.background = 'transparent'; });
+            partChoice.style.background = '#dce8e1';
+            if (reading.textPart) highlight(element, textPartRange(element, reading.textPart.index), { label: `Part · ${reading.textPreview}` });
+            else highlight(element, null, { label: 'Text', excluded: [...element.children].filter((child) => visibleText(child)) });
+          });
+          partChoice.addEventListener('click', () => pick(reading));
+          picker.append(partChoice);
+        }
+      }
     });
+    // Nothing after the range's start here: picking somewhere else, or taking the start back.
+    if (pickingRange && rangeStart && !candidates.length && !rangeEditing) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'Cancel range';
+      cancel.style.cssText = 'display:block;margin:7px 8px;padding:6px 8px;border:1px solid #9aa9a1;border-radius:6px;background:#fff;color:#31413e;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer';
+      cancel.addEventListener('click', () => cancelRange());
+      picker.append(cancel);
+    }
+    if (pickingRange && candidates.length) {
+      const excludeRow = document.createElement('label');
+      excludeRow.style.cssText = 'display:flex;align-items:center;gap:6px;padding:7px 8px;border-top:1px solid #c5cec8;font-weight:600;cursor:pointer';
+      exclude.style.cssText = 'margin:0';
+      excludeRow.append(exclude, pickingEnd ? 'End before it' : 'Start after it');
+      picker.append(excludeRow);
+    }
     const diagnostics = document.createElement('details');
     diagnostics.style.cssText = 'padding:7px 8px;border-top:1px solid #c5cec8';
     const diagnosticsSummary = document.createElement('summary');
@@ -1076,27 +1281,233 @@
     picker.append(diagnostics);
     document.documentElement.append(picker);
     if (candidates[0]) {
-      const firstChoice = picker.querySelector('button');
+      const firstChoice = picker.querySelector('[data-picker-choice]');
       if (firstChoice) firstChoice.style.background = '#dce8e1';
-      highlight(candidates[0]);
+      highlight(candidates[0], rangeStart ? rangeTo(candidates[0], true) : null);
     }
   };
 
+  /**
+   * A page with one record (a job's own page, or the pane a list shows it in): its fields are picked with no box first,
+   * and the box is the smallest one around them all (a range's end too). The pane, when the job shows in one beside
+   * the list: what tells its title from the rows' titles. Each field is then recorded within it, as if it had been
+   * picked first.
+   */
+  const recordAround = (fields) => {
+    const elements = fields.flatMap((field) => [field.selected, field.range?.end?.selected]).filter(Boolean).map(resolveCapturedElement).filter(Boolean);
+    const containing = [];
+    for (let node = elements[0]; node instanceof Element; node = composedParent(node)) {
+      if (elements.every((element) => composedContains(node, element))) containing.push(node);
+    }
+    const box = containing.find(isParentCandidate) || containing[0];
+    const within = (selected) => window.__hvyGalaxyInspector.snapshotElement(resolveCapturedElement(selected), box, 'target');
+    return {
+      parent: window.__hvyGalaxyInspector.snapshotElement(box, box, 'parent'),
+      // Each as it was picked, now within the box: a range with its end, which part of its text it reads, its field.
+      items: fields.map((field) => ({
+        ...within(field.selected),
+        ...(field.range ? { range: { ...field.range, end: within(field.range.end.selected) } } : {}),
+        ...(field.textPart ? { textPart: field.textPart } : {}),
+        ...(field.ownText ? { ownText: true } : {}),
+        ...(field.textPreview ? { textPreview: field.textPreview } : {}),
+        ...(field.fieldId ? { fieldId: field.fieldId } : {}),
+      })),
+    };
+  };
+
+  /**
+   * Takes back a range's start while its end is being picked (Undo last, or Cancel range), staying in range mode: the
+   * fields already picked are kept. False when no range is being picked, or when one picked before is being edited.
+   */
+  const cancelRange = () => {
+    if (!rangeStart || rangeEditing) return false;
+    clearRangeStart();
+    return true;
+  };
+
+  /** Leaves range mode (Esc, or Pick element), taking back a range's start if one was picked. */
+  const exitRangeMode = () => {
+    if (!rangeMode) return false;
+    rangeMode = false;
+    rangeModeChanged?.();
+    clearRangeStart();
+    return true;
+  };
+
+  const clearRangeStart = () => {
+    rangeStart = null;
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+    highlighted = null;
+    rangeStatus?.();
+  };
+
+  const setRangeStatus = (text) => {
+    if (rangeStart) rangeStart.status = text;
+    rangeStatus?.();
+  };
+
+  const beginRange = (element, includeStart) => {
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    rangeStart = { element, includeStart, status: '' };
+    if (rangeKeptEnd) {
+      const { element: end, includeEnd } = rangeKeptEnd;
+      rangeKeptEnd = null;
+      finishRange(end, includeEnd);
+      return;
+    }
+    setRangeStatus('Pick where the range ends · Esc leaves range mode');
+  };
+
+  /**
+   * Where a boundary of a range picked before is on the page now: the element inside the record that best fits its
+   * example, as a field is matched.
+   */
+  const rangeBoundaryElement = (selected) => {
+    const parent = resolvedScope();
+    if (!parent || !selected?.shape) return null;
+    return structuralTargetsWithin(parent)
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(selected, candidate, parent).score }))
+      .sort((left, right) => right.score - left.score)[0]?.element || null;
+  };
+
+  // The range becomes one field: its start's example, with where it ends and whether each boundary is part of it.
+  const finishRange = (end, includeEnd) => {
+    document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+    const { element: start, includeStart } = rangeStart;
+    rangeStart = null;
+    // A range made: back to picking elements.
+    rangeMode = false;
+    rangeModeChanged?.();
+    rangeStatus?.();
+    const textRange = textRangeBetween(start, end, includeStart, includeEnd);
+    const result = snapshot(start);
+    result.range = { includeStart, includeEnd, end: snapshot(end), summary: rangeSummary(start, end, includeStart, includeEnd, readableText(null, textRange)) };
+    if (targetCollection) {
+      targetCollection.add(start, result, textRange);
+      return;
+    }
+    publish(result);
+    window.__hvyGalaxyInspector.stop();
+  };
+
+  // What the page gets a click on at a point, beneath the inspector: the topmost element there as hit testing finds it
+  // (not what it lets clicks through), into shadow roots.
+  const pageElementAt = (x, y) => {
+    let found = null;
+    for (let root = document; root;) {
+      const element = root.elementsFromPoint(x, y).find((candidate) => !isInspectorElement(candidate));
+      if (!element || element === found) break;
+      found = element;
+      root = element.shadowRoot;
+    }
+    return found;
+  };
+
+  // Picking a record by what opens it: what a click at the pointer lands on (`opener`), and the record it is in, one of
+  // the matches (found again if the page replaced them).
+  const recordChoiceAt = (event) => {
+    if (recordChoice.matches.some((match) => !match.element.isConnected)) recordChoice.matches = findPatternMatches(inspectionPattern);
+    const opener = pageElementAt(event.clientX, event.clientY);
+    const match = opener ? recordChoice.matches.find((candidate) => composedContains(candidate.element, opener)) : null;
+    return match ? { match, opener } : null;
+  };
+
+  // The pointer's moves (pointermove and mousemove, and those a scroll makes under it), handled once a frame: the latest.
+  // Where it is, what it is over, and its path are kept as it moves, as the path is gone once the event is over.
+  let pendingMove = null;
+  let moveFrame = 0;
   const pointerMove = (event) => {
-    if (!active || pickingPaused || !(event.target instanceof Element)) return;
+    const path = event.composedPath();
+    pendingMove = { clientX: event.clientX, clientY: event.clientY, target: event.target, composedPath: () => path };
+    if (moveFrame) return;
+    moveFrame = requestAnimationFrame(() => {
+      moveFrame = 0;
+      const move = pendingMove;
+      pendingMove = null;
+      if (move) pointerMoveNow(move);
+    });
+  };
+  const pointerMoveNow = (event) => {
+    if (!active || pickingPaused || matchingView || !(event.target instanceof Element)) return;
     if (event.target.closest('#hvy-galaxy-inspector-picker')) return;
+    if (recordChoice) {
+      const choice = recordChoiceAt(event);
+      if (choice) highlight(choice.opener);
+      else {
+        document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        highlighted = null;
+      }
+      return;
+    }
     const candidate = candidatesAt(event.clientX, event.clientY, event.target, event.composedPath())[0];
+    if (rangeStart) {
+      if (!candidate) {
+        document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        highlighted = null;
+        setRangeStatus('Pick something after the start');
+        return;
+      }
+      if (candidate === highlighted) return;
+      const textRange = textRangeBetween(rangeStart.element, candidate, rangeStart.includeStart, true);
+      const text = readableText(null, textRange);
+      highlight(candidate, textRange);
+      setRangeStatus(`Pick where the range ends · Ends ${previewText(text, true)} · ${text.length.toLocaleString()} characters`);
+      return;
+    }
     if (candidate && candidate !== highlighted) highlight(candidate);
   };
   const click = (event) => {
     if (!active || pickingPaused || event.target instanceof Element && event.target.closest('#hvy-galaxy-inspector-picker, #hvy-galaxy-inspector-status')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    // Showing matching: the page is to look at; nothing is picked.
+    if (matchingView) return;
+    if (recordChoice) {
+      const choice = recordChoiceAt(event);
+      if (!choice) {
+        recordChoice.refuse();
+        return;
+      }
+      publish({
+        kind: 'integration-record-choice',
+        ...(inspectionContext ? { context: inspectionContext } : {}),
+        record: serializeMatches([choice.match], true).records[0],
+        // Where it is in the record, so it is found in every row, and the link clicking it follows, if any.
+        opener: { snapshot: window.__hvyGalaxyInspector.snapshotElement(choice.opener, choice.match.element, 'target'), href: openedHref(choice.opener) },
+      });
+      window.__hvyGalaxyInspector.stop();
+      return;
+    }
     showPicker(event);
   };
   const keydown = (event) => {
+    // Escape closes what is on top first: the menu of what to pick (Choose data inside the selected parent), and only
+    // that; picking carries on, the next Escape doing what it does.
+    const menu = document.getElementById('hvy-galaxy-inspector-picker');
+    if (active && event.key === 'Escape' && menu) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      menu.remove();
+      return;
+    }
+    // Escape in range mode leaves it, taking back a range's start if one was picked; the fields already picked are kept.
+    if (active && event.key === 'Escape' && !rangeEditing && exitRangeMode()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    // Escape while picking fields takes back the last one picked, as Undo last does; with none picked, it does nothing.
+    // It never leaves picking (Done and the toolbar do).
+    if (active && undoLastPick && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      undoLastPick();
+      return;
+    }
     if (active && event.key === 'Escape') {
-      window.location.href = 'hvy-integration://inspection-cancel';
+      if (host.cancel) host.cancel();
+      else window.location.href = messageUrl('inspection-cancel');
       window.__hvyGalaxyInspector.stop();
     }
   };
@@ -1135,6 +1546,42 @@
     return { shapeScore, relativePathScore, score: shapeScore * 0.74 + relativePathScore * 0.26 };
   };
 
+  /**
+   * Where a range field ends in a record: the element after its start that best fits the saved end. When the end appears
+   * more than once, such as an Apply button above and below a posting, the first of the closest fits is taken.
+   */
+  const rangeEndFor = (range, start, parent, minimumTargetConfidence) => {
+    const expected = range?.end?.selected;
+    if (!expected?.shape) return null;
+    const ends = structuralTargetsWithin(parent)
+      .filter((candidate) => followsStart(start, candidate))
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(expected, candidate, parent).score }))
+      .filter((candidate) => candidate.score >= minimumTargetConfidence);
+    if (!ends.length) return null;
+    const best = Math.max(...ends.map((candidate) => candidate.score));
+    return ends.find((candidate) => best - candidate.score < 0.035);
+  };
+
+  /**
+   * What opens a row's item (a list's `opener`): the element in the row that best fits the one picked. Not a field, so
+   * it may be one's element too (the title link). When it fits more than once, the first of the closest fits is taken.
+   */
+  const openerWithin = (row, opener, minimumTargetConfidence) => {
+    const expected = opener?.selected;
+    if (!expected?.shape) return null;
+    const fits = structuralTargetsWithin(row, !expected.relativePath?.length)
+      .map((candidate) => ({ element: candidate, score: targetCandidateSimilarity(expected, candidate, row).score }))
+      .filter((candidate) => candidate.score >= minimumTargetConfidence);
+    if (!fits.length) return null;
+    const best = Math.max(...fits.map((candidate) => candidate.score));
+    return fits.find((candidate) => best - candidate.score < 0.035).element;
+  };
+
+  // Whether a matched field is the only one on its element. A range field reads between its boundaries, so it may start
+  // at another field (the title it starts after) and is not counted.
+  const uniqueTargetElement = (target, matchedTargets) => Boolean(target.textRange)
+    || matchedTargets.filter((other) => !other.textRange && other.element === target.element && fieldTextSlot(other.matchedSnapshot) === fieldTextSlot(target.matchedSnapshot)).length === 1;
+
   const patternScopes = (pattern = {}) => {
     const expected = pattern.scope?.selected?.shape;
     if (!expected) return [{ element: document, score: 1 }];
@@ -1172,17 +1619,35 @@
       .sort((left, right) => right.score - left.score || left.fieldIndex - right.fieldIndex || left.candidateIndex - right.candidateIndex)
       .forEach((match) => {
         if (assigned.has(match.fieldIndex)) return;
+        if (match.matchedSnapshot?.range) {
+          assigned.set(match.fieldIndex, match);
+          return;
+        }
+        // One element is one field's, unless each reads a different part of its text (two labels in a line of them).
+        const slot = fieldTextSlot(match.matchedSnapshot);
         const conflicts = occupied.filter((entry) => elementsOverlap(entry.element, match.element));
-        if (conflicts.some((entry) => entry.element === match.element
-          || !learnedNestedRelationship(targets[entry.fieldIndex], targets[match.fieldIndex]))) return;
+        if (conflicts.some((entry) => (entry.element === match.element
+          ? entry.slot === slot || entry.slot === 'whole' || slot === 'whole'
+          : !learnedNestedRelationship(targets[entry.fieldIndex], targets[match.fieldIndex])))) return;
         assigned.set(match.fieldIndex, match);
-        occupied.push({ fieldIndex: match.fieldIndex, element: match.element, score: match.score });
+        occupied.push({ fieldIndex: match.fieldIndex, element: match.element, score: match.score, slot });
       });
     const matchedTargets = targetEvaluations.map(({ target, fieldIndex, matches }) => {
       const best = assigned.get(fieldIndex);
       const cardinality = target.cardinality === 'list' ? 'list' : 'single';
       const optional = target.optional === true;
+      const range = best?.matchedSnapshot?.range;
+      if (range) {
+        // A range field is its start and end: without an end in this record it is missing, not cut short.
+        const end = rangeEndFor(range, best.element, element, minimumTargetConfidence);
+        if (!end) return { label: target.label, cardinality: 'single', optional, score: 0, elements: [] };
+        const score = (best.score + end.score) / 2;
+        const textRange = textRangeBetween(best.element, end.element, range.includeStart === true, range.includeEnd === true);
+        return { label: target.label, cardinality: 'single', optional, ...best, score, end: end.element, textRange, elements: [{ ...best, score }] };
+      }
       const elements = best ? [best] : [];
+      // Its examples, for reading a part of a line of labels by the one with as many parts.
+      const variants = (target.snapshots?.length ? target.snapshots : [target.snapshot]).filter(Boolean);
       if (cardinality === 'list' && best && best.score >= minimumTargetConfidence) {
         matches.forEach((match) => {
           if (match === best || match.score < minimumTargetConfidence || best.score - match.score >= 0.035) return;
@@ -1192,7 +1657,7 @@
           occupied.push({ fieldIndex, element: match.element, score: match.score });
         });
       }
-      return { label: target.label, cardinality, optional, ...best, elements };
+      return { label: target.label, cardinality, optional, ...best, elements, variants };
     });
     const scoredTargetIndexes = matchedTargets.flatMap((target, index) => !target.optional || target.element && target.score >= minimumTargetConfidence ? [index] : []);
     const scoredTargets = scoredTargetIndexes.map((index) => matchedTargets[index]);
@@ -1227,62 +1692,85 @@
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
     const evaluated = evaluateParentCandidate(element, parentScore, targets, minimumTargetConfidence);
     return evaluated.matchedTargets.map((target) => {
-      const unique = evaluated.matchedTargets.filter((other) => other.element === target.element).length === 1;
-      if (!target.element || target.score < minimumTargetConfidence || !unique) return { label: target.label, score: target.score || 0, snapshot: null };
+      if (!target.element || target.score < minimumTargetConfidence || !uniqueTargetElement(target, evaluated.matchedTargets)) return { label: target.label, score: target.score || 0, snapshot: null };
       const previousKind = inspectionKind;
       const previousScope = scopeElement;
       inspectionKind = 'target';
       scopeElement = element;
-      const fullSnapshot = snapshot(target.element);
+      const suggestedSnapshot = (suggested) => {
+        const fullSnapshot = snapshot(suggested);
+        return {
+          kind: fullSnapshot.kind,
+          inspectionKind: fullSnapshot.inspectionKind,
+          selected: {
+            tag: fullSnapshot.selected.tag,
+            role: fullSnapshot.selected.role,
+            directText: fullSnapshot.selected.directText,
+            descendantText: fullSnapshot.selected.descendantText,
+            cssPath: fullSnapshot.selected.cssPath,
+            shape: fullSnapshot.selected.shape,
+            relativePath: fullSnapshot.selected.relativePath,
+          },
+        };
+      };
+      const targetSnapshot = suggestedSnapshot(target.element);
+      // A range field's example in this record is its start and end here.
+      if (target.textRange) {
+        const { includeStart, includeEnd } = target.matchedSnapshot.range;
+        targetSnapshot.range = { includeStart, includeEnd, end: suggestedSnapshot(target.end), summary: rangeSummary(target.element, target.end, includeStart, includeEnd, readableText(null, target.textRange)) };
+      }
       inspectionKind = previousKind;
       scopeElement = previousScope;
-      const targetSnapshot = {
-        kind: fullSnapshot.kind,
-        inspectionKind: fullSnapshot.inspectionKind,
-        selected: {
-          tag: fullSnapshot.selected.tag,
-          role: fullSnapshot.selected.role,
-          directText: fullSnapshot.selected.directText,
-          descendantText: fullSnapshot.selected.descendantText,
-          cssPath: fullSnapshot.selected.cssPath,
-          shape: fullSnapshot.selected.shape,
-          relativePath: fullSnapshot.selected.relativePath,
-        },
-      };
       return { label: target.label, score: target.score, snapshot: targetSnapshot };
     });
   };
 
-  const evaluatePatternCandidates = (pattern = {}) => {
+  // `within`: only elements inside these (elements the page added), not the whole page.
+  const evaluatePatternCandidates = (pattern = {}, within = null) => {
+    const outermost = matchingShapes === null;
+    if (outermost) matchingShapes = new WeakMap();
+    try {
+      return evaluatePatternCandidatesNow(pattern, within);
+    } finally {
+      if (outermost) matchingShapes = null;
+    }
+  };
+  const evaluatePatternCandidatesNow = (pattern = {}, within = null) => {
     const { minimumConfidence, minimumTargetConfidence } = patternThresholds(pattern);
     const parentShapes = (pattern.parents || []).map((sample) => sample?.selected?.shape).filter(Boolean);
     const targets = (pattern.targets || []).filter((target) => target?.snapshot?.selected?.shape || target?.snapshots?.some((variant) => variant?.selected?.shape));
-    const candidates = patternScopes(pattern).flatMap((scope) => deepElements(scope.element).filter((element) => element !== scope.element));
+    const scopes = patternScopes(pattern);
+    const candidates = within
+      ? within.flatMap((root) => [root, ...deepElements(root)]).filter((element) => scopes.some((scope) => element !== scope.element && (scope.element === document ? element.isConnected : composedContains(scope.element, element))))
+      : scopes.flatMap((scope) => deepElements(scope.element).filter((element) => element !== scope.element));
     return [...new Set(candidates)]
       .filter(isParentCandidate)
       .map((element) => ({ element, parentScore: Math.max(0, ...parentShapes.map((shape) => shapeSimilarity(shape, shapeSignature(element)))) }))
       .filter((candidate) => candidate.parentScore >= Math.max(0.5, minimumConfidence - 0.13))
       .map((candidate) => {
         const evaluated = evaluateParentCandidate(candidate.element, candidate.parentScore, targets, minimumTargetConfidence);
-        const presentTargets = evaluated.matchedTargets.filter((target) => !target.optional || target.element && target.score >= minimumTargetConfidence);
-        const targetElements = presentTargets.map((target) => target.element).filter(Boolean);
-        const distinctTargets = new Set(targetElements).size === targetElements.length;
+        const presentTargets = evaluated.matchedTargets.filter((target) => !target.textRange && (!target.optional || target.element && target.score >= minimumTargetConfidence));
+        // No two fields read the same text of one element (two parts of it are two fields).
+        const targetSlots = presentTargets.filter((target) => target.element).map((target) => `${cssPath(target.element)}\u0000${fieldTextSlot(target.matchedSnapshot)}`);
+        const distinctTargets = new Set(targetSlots).size === targetSlots.length;
         const targetsPass = evaluated.matchedTargets.every((target) => target.optional || target.element && target.score >= minimumTargetConfidence);
         const hasMatchedTarget = !targets.length || evaluated.matchedTargets.some((target) => target.element && target.score >= minimumTargetConfidence);
         const hasLearnedAbsence = evaluated.matchedTargets.some((target) => target.optional && target.rejectedByNegative);
+        const accepted = (hasMatchedTarget || hasLearnedAbsence) && targetsPass && distinctTargets && evaluated.score >= minimumConfidence;
         return {
           ...evaluated,
           distinctTargets,
           targetsPass,
-          accepted: (hasMatchedTarget || hasLearnedAbsence) && targetsPass && distinctTargets && evaluated.score >= minimumConfidence,
+          accepted,
           minimumConfidence,
           minimumTargetConfidence,
+          ...(accepted && pattern.opener ? { opener: openerWithin(candidate.element, pattern.opener, minimumTargetConfidence) } : {}),
         };
       });
   };
 
-  const findPatternMatches = (pattern = {}) => {
-    const parentCandidates = evaluatePatternCandidates(pattern)
+  const findPatternMatches = (pattern = {}, within = null) => {
+    const parentCandidates = evaluatePatternCandidates(pattern, within)
       .filter((candidate) => candidate.accepted)
       .sort((left, right) => right.parentScore - left.parentScore || right.score - left.score);
     const accepted = [];
@@ -1466,9 +1954,98 @@
     };
   };
 
+  const linkHref = (element) => {
+    const anchor = element.closest?.('a[href]') || element.querySelector?.('a[href]');
+    return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
+  };
+
+  // The link clicking an element follows: its own, or the link it is in. A box with a link somewhere inside it does not
+  // follow it when clicked, so it has none (what it opens, it opens by its script).
+  const openedHref = (element) => {
+    const anchor = element.closest?.('a[href]');
+    return anchor ? new URL(anchor.getAttribute('href'), location.href).href : null;
+  };
+
+  // Labels run together in one element, set apart by a separator with a space each side ("Acme · 3 months ago ·
+  // Seattle, WA"): a middle dot, a bullet or a dot like one, or a bar. Not a comma, which a value can hold.
+  const TEXT_PART_SEPARATOR = /\s+[\u00B7\u2022\u2219\u22C5|]\s+/;
+  const TEXT_PARTS_MAX = 500;
+  const TEXT_PART_MAX = 100;
+  const textParts = (element) => visibleText(element).split(TEXT_PART_SEPARATOR).map((part) => part.trim());
+  // The parts offered as fields of their own: of a line of labels, not of prose (on one line, short, every part short).
+  const offeredTextParts = (element) => {
+    const whole = (element.innerText || element.textContent || '').trim();
+    if (!whole || whole.length > TEXT_PARTS_MAX || /\n/.test(whole)) return [];
+    const parts = textParts(element);
+    return parts.length >= 2 && parts.every((part) => part && part.length <= TEXT_PART_MAX) ? parts : [];
+  };
+  // An element's own text, without what its child elements hold ("Senior Engineer" of a title with its date in a span).
+  const ownText = (element) => [...element.childNodes]
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Where part `index` of an element's text is on the page, to box it: the text between its separators.
+  const textPartRange = (element, index) => {
+    const nodes = [];
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node);
+    const raw = nodes.map((node) => node.textContent).join('');
+    const bounds = [];
+    let from = 0;
+    for (const separator of raw.matchAll(new RegExp(TEXT_PART_SEPARATOR.source, 'g'))) {
+      bounds.push([from, separator.index]);
+      from = separator.index + separator[0].length;
+    }
+    bounds.push([from, raw.length]);
+    const [start, end] = bounds[index < 0 ? bounds.length + index : index] ?? [];
+    if (start === undefined) return null;
+    // Its trimmed ends, as offsets into the text nodes.
+    const startAt = start + (raw.slice(start, end).length - raw.slice(start, end).trimStart().length);
+    const endAt = end - (raw.slice(start, end).length - raw.slice(start, end).trimEnd().length);
+    const range = document.createRange();
+    let offset = 0;
+    for (const node of nodes) {
+      const length = node.textContent.length;
+      if (startAt >= offset && startAt <= offset + length) range.setStart(node, startAt - offset);
+      if (endAt >= offset && endAt <= offset + length) {
+        range.setEnd(node, endAt - offset);
+        break;
+      }
+      offset += length;
+    }
+    return range;
+  };
+  // Own text offered when it is some of the element's text, not all or none of it.
+  const offeredOwnText = (element) => {
+    const own = ownText(element);
+    return own && own !== visibleText(element) && [...element.children].some((child) => visibleText(child)) ? own : '';
+  };
+  // A field's value as its example says to read it: one part of its text (`textPart.index`, -1 the last), its own
+  // text, or all of it. A line of labels can leave one out (a job that doesn't say it is remote): read by the example
+  // whose line had as many parts (`textPart.count`), if the field has one; otherwise a part counted from the start is
+  // still where it was (a part after it is what is missing), and the last part of a longer or shorter line can't be
+  // told from the one before it, so it is missing. `variants`: the field's examples.
+  const fieldValue = (element, snapshot, variants = []) => {
+    if (snapshot?.ownText) return ownText(element) || null;
+    if (snapshot?.textPart) {
+      const parts = textParts(element);
+      const reading = (variants.find((variant) => variant?.textPart?.count === parts.length) ?? snapshot).textPart;
+      if (typeof reading.count === 'number' && reading.count !== parts.length && reading.index < 0) return null;
+      const index = reading.index < 0 ? parts.length + reading.index : reading.index;
+      return parts[index] || null;
+    }
+    return extractedValue(element);
+  };
+  // Which of an element's text a field reads, so two fields reading different parts of one element are not one field
+  // read twice.
+  const fieldTextSlot = (snapshot) => (snapshot?.ownText ? 'own' : snapshot?.textPart ? `part:${snapshot.textPart.index}` : 'whole');
+
   const extractedValue = (element) => {
     const { directText, accessibleName } = meaningfulText(element);
-    const completeText = visibleText(element);
+    // Line breaks kept, so a section of paragraphs and lists reads as it does on the page.
+    const completeText = readableText(element) || visibleText(element);
     if (completeText) return completeText;
     if (directText) return directText;
     if (accessibleName) return accessibleName;
@@ -1495,10 +2072,11 @@
       if (typeof check.expectedValue !== 'string' || !check.expectedValue.trim()) {
         return { id: check.id, name: check.name, ready: true };
       }
-      const actual = normalizedReadyValue(extractedValue(match.element));
+      const actual = normalizedReadyValue(controlState(match.element) ?? extractedValue(match.element));
       return {
         id: check.id,
         name: check.name,
+        value: actual,
         ready: actual === normalizedReadyValue(check.expectedValue),
         reason: actual === normalizedReadyValue(check.expectedValue) ? undefined : 'value_changed',
       };
@@ -1530,12 +2108,21 @@
     || isDataListControl(element)
     || isPopupSelectControl(element);
 
-  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture) => {
+  // A page number's text in a pager: "3", or nothing when the element shows something else.
+  const pageNumberText = (element) => {
+    const text = visibleText(element);
+    return /^\d+$/.test(text) ? Number(text) : null;
+  };
+
+  // With a page number, the target is the one like the recorded one (a link in the same pager) that shows that number:
+  // a recorded "2" finds "3" on page 2, as the pager's other numbers are its siblings.
+  const resolveInteractionTarget = (scope, snapshotValue, minimumConfidence, gesture, pageNumber = null) => {
     const expected = snapshotValue?.selected;
     if (!expected?.shape) return { status: 'no_match', reason: 'target_pattern_missing' };
     const candidates = structuralTargetsWithin(scope, scope instanceof Element && !expected.relativePath?.length)
       .filter((element) => gesture !== 'type' || isTextEntryElement(element))
       .filter((element) => gesture !== 'select' || isSelectControl(element))
+      .filter((element) => pageNumber === null || pageNumberText(element) === pageNumber)
       .map((element) => {
         if (scope instanceof Element) return { element, ...targetCandidateSimilarity(expected, element, scope) };
         const shapeScore = shapeSimilarity(expected.shape, shapeSignature(element));
@@ -1805,7 +2392,7 @@
     const commandInputs = Array.isArray(command?.inputs) ? command.inputs : [];
     const commandInputIds = new Set(commandInputs.map((input) => input?.id).filter((id) => typeof id === 'string' && id));
     if (!command || !Array.isArray(steps) || !steps.length || steps.some((step) => !step || !['click', 'double-click', 'right-click', 'type', 'select'].includes(step.gesture)
-      || (step.gesture === 'type' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId)))
+      || (step.gesture === 'type' && typeof step.value !== 'string' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId)))
       || (step.gesture === 'select' && typeof step.value !== 'string' && (typeof step.inputId !== 'string' || !commandInputIds.has(step.inputId))))) return { status: 'no_match', reason: 'command_invalid', stepIndex: 0, stepsExecuted: 0 };
     const { minimumTargetConfidence } = patternThresholds(payload.pattern);
     let record = null;
@@ -1828,13 +2415,14 @@
     };
     for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
       const step = steps[stepIndex];
-      const textInput = step.gesture === 'type' ? payload.inputs?.[step.inputId] : undefined;
+      // What a step types: its parameter's value, or what was typed recording it (a site setup's steps to its list).
+      const textInput = step.gesture === 'type' ? (step.inputId ? payload.inputs?.[step.inputId] : step.value) : undefined;
       const selectionInput = step.gesture === 'select' ? (step.inputId ? payload.inputs?.[step.inputId] : step.value) : undefined;
       if (step.gesture === 'type' && typeof textInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
       if (step.gesture === 'select' && typeof selectionInput !== 'string') return { status: 'no_match', reason: 'command_input_missing', inputId: step.inputId, stepIndex, stepsExecuted: stepIndex };
       const initialScope = stepIndex === 0 && command.scope !== 'record' ? scopeForStep() : null;
       const resolved = stepIndex === 0 && command.scope !== 'record'
-        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture) : { status: 'no_match', reason: 'target_not_found' }
+        ? initialScope ? resolveInteractionTarget(initialScope, step.target, minimumTargetConfidence, step.gesture, command.pagination === 'page-number' ? payload.pageNumber ?? null : null) : { status: 'no_match', reason: 'target_not_found' }
         : await waitForInteractionTarget(scopeForStep, step, minimumTargetConfidence);
       if (resolved.status !== 'matched') return { ...resolved, stepIndex, stepsExecuted: stepIndex };
       if (payload.watchRecord && command.scope === 'record' && stepIndex === steps.length - 1 && record?.element) {
@@ -1887,12 +2475,18 @@
           ...(includeValues ? {
             value: missing
               ? target.cardinality === 'list' ? [] : null
-              : target.cardinality === 'list'
-                ? target.elements.map((item) => extractedValue(item.element))
-                : extractedValue(target.element),
+              : target.textRange
+                ? readableText(null, target.textRange)
+                : target.cardinality === 'list'
+                  ? target.elements.map((item) => fieldValue(item.element, item.matchedSnapshot ?? target.matchedSnapshot, target.variants))
+                  : fieldValue(target.element, target.matchedSnapshot, target.variants),
+            // The link a field points at, such as a job title linking to its posting.
+            href: missing || target.cardinality === 'list' || target.textRange ? null : linkHref(target.element),
           } : {}),
         };
       }),
+      // What opens the row's item, for a list whose pattern has one: where it is, and the link clicking it follows.
+      ...(includeValues && match.opener !== undefined ? { opener: match.opener ? { element: cssPath(match.opener), href: openedHref(match.opener) } : null } : {}),
     })),
   });
 
@@ -1908,6 +2502,18 @@
   };
 
   let extractionRun = 0;
+  /**
+   * A site setup's list, got where runs read it (`prepareList`: its "Get to the list" command, and its ready checks):
+   * its steps taken unless its ready checks pass already, as a run does.
+   */
+  const getListThere = async (prepareList) => {
+    const checks = prepareList.checks || { elements: [] };
+    if (checks.elements?.length && pageReadiness(checks).ready) return;
+    await executeCommand({ command: prepareList.command, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } });
+    await waitForInteractionSettled();
+  };
+  // How long reading a page scrolls it at most.
+  const EXTRACTION_SCROLL_BUDGET_MS = 8_000;
 
   const extractAcrossPage = async (pattern = {}, runId = extractionRun, checkPage = () => ({ ready: true })) => {
     let pageFailure = null;
@@ -1995,7 +2601,11 @@
         structuralRecords.push(entry);
       }
     };
+    // Scrolling stops after a while however much page is left (one that keeps loading more as it scrolls): what was
+    // found by then is the answer, said to have stopped early.
+    let stoppedEarly = false;
     if (scroller && pattern.scrollPage !== false) {
+      const scrollStartedAt = Date.now();
       const maximum = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
       const step = Math.max(240, scroller.clientHeight * 0.9);
       const positions = [];
@@ -2003,6 +2613,10 @@
       positions.push(maximum);
       for (const top of positions) {
         if (runId !== extractionRun) break;
+        if (Date.now() - scrollStartedAt > EXTRACTION_SCROLL_BUDGET_MS) {
+          stoppedEarly = true;
+          break;
+        }
         scroller.scrollTop = top;
         await settle();
         if (runId !== extractionRun) break;
@@ -2024,27 +2638,33 @@
     return {
       matches: selected.length,
       records: selected,
+      ...(stoppedEarly ? { stoppedEarly: true } : {}),
       diagnostics: selected.length ? null : diagnosePattern(effectivePattern),
       minimumConfidence: patternThresholds(effectivePattern).minimumConfidence,
     };
+  };
+
+  // The pattern as one saved example alone: its parent, and each field as that example had it.
+  const examplePattern = (pattern, exampleIndex) => {
+    const targets = (pattern.targets || []).map((target) => {
+      const hasPositionalSnapshot = Array.isArray(target.exampleSnapshots) && exampleIndex < target.exampleSnapshots.length;
+      const exampleSnapshot = hasPositionalSnapshot
+        ? target.exampleSnapshots[exampleIndex]
+        : target.snapshots?.[exampleIndex] ?? target.snapshot ?? null;
+      return {
+        ...target,
+        snapshot: exampleSnapshot,
+        snapshots: exampleSnapshot ? [exampleSnapshot] : [],
+      };
+    });
+    return { ...pattern, parents: [pattern.parents[exampleIndex]], targets };
   };
 
   const extractLiveExamples = async (pattern = {}, runId = extractionRun) => {
     const usedRecords = new Set();
     const records = [];
     for (let exampleIndex = 0; exampleIndex < (pattern.parents || []).length; exampleIndex += 1) {
-      const targets = (pattern.targets || []).map((target) => {
-        const hasPositionalSnapshot = Array.isArray(target.exampleSnapshots) && exampleIndex < target.exampleSnapshots.length;
-        const exampleSnapshot = hasPositionalSnapshot
-          ? target.exampleSnapshots[exampleIndex]
-          : target.snapshots?.[exampleIndex] ?? target.snapshot ?? null;
-        return {
-          ...target,
-          snapshot: exampleSnapshot,
-          snapshots: exampleSnapshot ? [exampleSnapshot] : [],
-        };
-      });
-      const extraction = await extractAcrossPage({ ...pattern, parents: [pattern.parents[exampleIndex]], targets }, runId);
+      const extraction = await extractAcrossPage(examplePattern(pattern, exampleIndex), runId);
       if (runId !== extractionRun) break;
       const available = extraction.records.find((record) => {
         const identity = recordContentIdentity(record);
@@ -2060,7 +2680,79 @@
     return { matches: records.filter(Boolean).length, records, diagnostics: null, minimumConfidence: patternThresholds(pattern).minimumConfidence };
   };
 
+  // After the live examples check, each saved example it did not find is looked for again in what the page adds (a list
+  // loading more as it is scrolled), not the whole page again: an element the page has, anywhere in it, was already
+  // looked at. It stops once all are found, the page navigates, or another extraction starts. Each find is published
+  // with the example records as they now are; Galaxy keeps the best fit for each.
+  let liveExampleWatch = null;
+  const stopLiveExampleWatch = () => {
+    if (!liveExampleWatch) return;
+    liveExampleWatch.observer.disconnect();
+    document.removeEventListener('scroll', liveExampleWatch.scrolled, true);
+    clearTimeout(liveExampleWatch.timer);
+    liveExampleWatch = null;
+  };
+  // What the inspector draws in the page is not the page.
+  const isInspectorElement = (element) => Boolean(element.closest('[id^="hvy-galaxy-"], [data-collection-selection]'));
+  const watchLiveExamples = (pattern, records, context) => {
+    stopLiveExampleWatch();
+    if (!records.some((record) => record === null)) return;
+    const pageUrl = location.href;
+    const runId = extractionRun;
+    let added = [];
+    const evaluate = () => {
+      if (!liveExampleWatch) return;
+      liveExampleWatch.timer = null;
+      if (location.href !== pageUrl || runId !== extractionRun) {
+        stopLiveExampleWatch();
+        return;
+      }
+      // The outermost of what was added, still in the page: those with nothing else added above them.
+      const addedSet = new Set(added);
+      const roots = [...addedSet].filter((element) => {
+        if (!element.isConnected) return false;
+        for (let node = composedParent(element); node; node = composedParent(node)) if (addedSet.has(node)) return false;
+        return true;
+      });
+      added = [];
+      if (!roots.length) return;
+      const used = new Set(records.filter(Boolean).map(recordContentIdentity));
+      let found = false;
+      records.forEach((record, exampleIndex) => {
+        if (record) return;
+        const available = serializeMatches(findPatternMatches(examplePattern(pattern, exampleIndex), roots), true).records
+          .find((candidate) => !used.has(recordContentIdentity(candidate)));
+        if (!available) return;
+        used.add(recordContentIdentity(available));
+        records[exampleIndex] = available;
+        found = true;
+      });
+      if (found) publish({ kind: 'integration-live-examples', context, page: { origin: location.origin, pathname: location.pathname }, records: [...records] });
+      if (!records.some((record) => record === null)) stopLiveExampleWatch();
+    };
+    // Additions come in bursts as a list loads, and as it scrolls: evaluated once both pause, so not while scrolling.
+    const wait = () => {
+      if (!added.length || !liveExampleWatch) return;
+      clearTimeout(liveExampleWatch.timer);
+      liveExampleWatch.timer = setTimeout(evaluate, 400);
+    };
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) if (node instanceof Element && !isInspectorElement(node)) added.push(node);
+      }
+      wait();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener('scroll', wait, true);
+    liveExampleWatch = { observer, scrolled: wait, timer: null };
+  };
+
   window.__hvyGalaxyInspector = {
+    // A result found by another of Galaxy's scripts in the page (a WebMCP request's, integration-webmcp-bridge.js), sent as
+    // this sends its own, where the host does not wait for that script's own result (Tauri on Windows and Linux).
+    publish(value) {
+      publish(value);
+    },
     discoverStructuredSources() {
       const sources = [];
       document.querySelectorAll('link[rel~="alternate"][href]').forEach((link) => {
@@ -2069,17 +2761,14 @@
         if (!kind) return;
         sources.push({ kind, url: new URL(link.href, location.href).href, title: link.getAttribute('title') || `${kind.toUpperCase()} feed`, authenticated: false, discoveredBy: 'link' });
       });
-      performance.getEntriesByType('resource').forEach((entry) => {
-        if (!['fetch', 'xmlhttprequest'].includes(entry.initiatorType)) return;
+      timedRequests.forEach((contentType, name) => {
         let url;
-        try { url = new URL(entry.name, location.href); } catch (_) { return; }
+        try { url = new URL(name, location.href); } catch (_) { return; }
         if (url.origin !== location.origin || !['http:', 'https:'].includes(url.protocol)) return;
-        if (!/\.json(?:$|\?)|[?&](?:format|output)=json(?:&|$)/i.test(url.href)) return;
-        sources.push({ kind: 'json-api', url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
-      });
-      observedStructuredUrls.forEach((kind, value) => {
-        const url = new URL(value);
-        sources.push({ kind, url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
+        const type = contentType.toLowerCase();
+        const kind = type.includes('json') ? 'json-api' : type.includes('atom') ? 'atom' : type.includes('rss') || type.includes('xml') ? 'rss'
+          : /\.json(?:$|\?)|[?&](?:format|output)=json(?:&|$)/i.test(url.href) ? 'json-api' : null;
+        if (kind) sources.push({ kind, url: url.href, title: `${url.pathname}${url.search}`, authenticated: true, discoveredBy: 'network' });
       });
       return [...new Map(sources.map((source) => [`${source.kind}|${source.url}`, source])).values()];
     },
@@ -2134,6 +2823,12 @@
       }
     },
     start(kind = 'target', options = {}) {
+      // A site setup's list, got where runs read it before picking on it (`prepareList`); then picking starts as asked.
+      if (options.prepareList) {
+        const { prepareList, ...picking } = options;
+        void getListThere(prepareList).then(() => window.__hvyGalaxyInspector.start(kind, picking));
+        return;
+      }
       inspectionKind = options.scopeSelection ? 'scope' : kind === 'parent' ? 'parent' : 'target';
       inspectionContext = options.context && typeof options.context === 'object' ? options.context : null;
       scopeElement = options.selectionScope
@@ -2147,35 +2842,62 @@
       inspectionPattern = options.existingPattern
         ? { ...options.existingPattern, ...(liveMinimumConfidence === null ? {} : { minimumConfidence: liveMinimumConfidence }) }
         : null;
+      matchingView = options.matchingView === true && Boolean(inspectionPattern);
       active = true;
       pickingPaused = false;
       removeUi();
       const shield = document.createElement('div');
       shield.id = 'hvy-galaxy-inspector-shield';
-      shield.style.cssText = 'position:fixed;inset:0;z-index:2147483644;background:transparent;cursor:crosshair;pointer-events:auto';
+      shield.style.cssText = `position:fixed;inset:0;z-index:2147483644;background:transparent;cursor:${matchingView ? 'default' : 'crosshair'};pointer-events:auto`;
       document.documentElement.append(shield);
+      // The shield takes the wheel. Over a page that scrolls as a whole, the browser scrolls it (the shield is fixed over
+      // it), as smoothly as ever. Only a box that scrolls within the page is scrolled here, as the browser does not reach
+      // it through the shield: found once a gesture (the wheel's events until they pause), and by whole pixels, as the
+      // page keeps (scrollTop drops a fraction), with what is left over kept for the next, as a touchpad scrolled slowly
+      // moves less than a pixel an event.
+      let wheelScroller = null;
+      let wheelPause = 0;
+      let wheelRest = { x: 0, y: 0 };
       shield.addEventListener('wheel', (event) => {
-        const chains = elementsBehindInspector(event.clientX, event.clientY).flatMap((element) => {
-          const ancestors = [];
-          for (let node = element; node instanceof Element; node = node.parentElement) ancestors.push(node);
-          return ancestors;
-        });
-        const scroller = [...new Set(chains)].find((element) => {
-          const style = getComputedStyle(element);
-          return element.scrollHeight > element.clientHeight + 2 && /(auto|scroll)/.test(style.overflowY);
-        }) || document.scrollingElement;
-        if (!scroller) return;
+        if (!wheelScroller) {
+          const chains = elementsBehindInspector(event.clientX, event.clientY).flatMap((element) => {
+            const ancestors = [];
+            for (let node = element; node instanceof Element; node = node.parentElement) ancestors.push(node);
+            return ancestors;
+          });
+          wheelScroller = [...new Set(chains)].find((element) => {
+            const style = getComputedStyle(element);
+            return element.scrollHeight > element.clientHeight + 2 && /(auto|scroll)/.test(style.overflowY);
+          }) || document.scrollingElement;
+        }
+        clearTimeout(wheelPause);
+        wheelPause = setTimeout(() => {
+          wheelScroller = null;
+          wheelRest = { x: 0, y: 0 };
+        }, 150);
+        if (!wheelScroller || wheelScroller === document.scrollingElement) return;
         event.preventDefault();
-        scroller.scrollTop += event.deltaY;
-        scroller.scrollLeft += event.deltaX;
+        wheelRest = { x: wheelRest.x + event.deltaX, y: wheelRest.y + event.deltaY };
+        const step = { x: Math.trunc(wheelRest.x), y: Math.trunc(wheelRest.y) };
+        wheelRest = { x: wheelRest.x - step.x, y: wheelRest.y - step.y };
+        if (step.y) wheelScroller.scrollTop += step.y;
+        if (step.x) wheelScroller.scrollLeft += step.x;
       }, { passive: false });
       const trackedBoxes = [];
+      let matchingSummary = '';
       targetCollection = null;
+      undoLastPick = null;
       toolbarControl = null;
       commandRecordElements = options.commandRecorder?.scope === 'record'
         ? new Set(inspectionPattern ? findPatternMatches(inspectionPattern).map((match) => match.element) : [])
         : null;
-      if (inspectionPattern) {
+      // The pattern's matches on the page, boxed: drawn again as the page changes (below), as a site may draw its list
+      // after it loads. Only these boxes are replaced; the picker's own stay.
+      const drawExistingMatches = () => {
+        document.getElementById('hvy-galaxy-existing-matches')?.remove();
+        for (let index = trackedBoxes.length - 1; index >= 0; index -= 1) {
+          if (trackedBoxes[index].existing) trackedBoxes.splice(index, 1);
+        }
         const existingLayer = document.createElement('div');
         existingLayer.id = 'hvy-galaxy-existing-matches';
         existingLayer.style.cssText = 'position:fixed;inset:0;z-index:2147483645;pointer-events:none';
@@ -2189,6 +2911,20 @@
           diagnosticCandidates.push(candidate);
           if (diagnosticCandidates.length >= 50) break;
         }
+        // How close the page came, said in the status while showing matching: the best candidate, and why it failed.
+        const best = rankedCandidates[0];
+        const percent = (value) => `${Math.round((value || 0) * 100)}%`;
+        matchingSummary = !best
+          ? 'Nothing on this page is close to its examples'
+          : best.accepted
+            ? `It matches here · ${percent(best.score)}`
+            : [
+              `Closest ${percent(best.score)} (needs ${percent(minimumConfidence)})`,
+              ...best.matchedTargets
+                .filter((target) => !target.optional && (!target.element || target.score < best.minimumTargetConfidence))
+                .map((target) => `${target.label} ${target.element ? `${percent(target.score)} (needs ${percent(best.minimumTargetConfidence)})` : 'not found'}`),
+              ...(best.distinctTargets ? [] : ['fields overlap']),
+            ].join(' · ');
         diagnosticCandidates.sort((left, right) => left.element.getBoundingClientRect().top - right.element.getBoundingClientRect().top);
         diagnosticCandidates.forEach((match, index) => {
           const parentColor = match.accepted ? '#27865f' : '#c56a25';
@@ -2205,12 +2941,14 @@
           caption.style.cssText = `display:inline-block;padding:2px 5px;background:${parentColor};color:#fff`;
           box.append(caption);
           existingLayer.append(box);
-          trackedBoxes.push({ element: match.element, box });
+          trackedBoxes.push({ element: match.element, box, existing: true });
 
-          if (!match.accepted) return;
+          // Picking one of the records (by what opens it) shows only the records: their fields' boxes would read as what
+          // is being picked.
+          // Showing matching, a candidate that fails shows its fields too: which failed is why.
+          if ((!match.accepted && !matchingView) || options.recordChoice) return;
           match.matchedTargets.forEach((target) => {
-            const uniqueTarget = match.matchedTargets.filter((other) => other.element === target.element).length === 1;
-            const passes = Boolean(target.element) && target.score >= match.minimumTargetConfidence && uniqueTarget;
+            const passes = Boolean(target.element) && target.score >= match.minimumTargetConfidence && uniqueTargetElement(target, match.matchedTargets);
             if (target.optional && !passes) return;
             const targetColor = passes ? '#27865f' : '#d33f49';
             const targetElements = target.cardinality === 'list' && target.elements.length ? target.elements.map((item) => item.element) : target.element ? [target.element] : [];
@@ -2221,16 +2959,17 @@
               targetBox.dataset.existingMatchLabel = target.label;
               targetBox.style.cssText = `position:fixed;border:2px ${passes ? 'solid' : 'dashed'} ${targetColor};box-sizing:border-box;background:${targetColor}18;color:#fff;font:10px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif`;
               const targetCaption = document.createElement('span');
-              targetCaption.textContent = `${target.label}${target.cardinality === 'list' ? ` ${targetIndex + 1}` : ''} · ${Math.round((target.score || 0) * 100)}%`;
+              targetCaption.textContent = `${target.label}${target.cardinality === 'list' ? ` ${targetIndex + 1}` : ''}${target.textRange ? ` · ${readableText(null, target.textRange).length.toLocaleString()} characters` : ''} · ${Math.round((target.score || 0) * 100)}%`;
               targetCaption.style.cssText = `display:inline-block;padding:1px 4px;background:${targetColor};color:#fff`;
               targetBox.append(targetCaption);
               existingLayer.append(targetBox);
-              trackedBoxes.push({ element, box: targetBox });
+              trackedBoxes.push({ element, box: targetBox, existing: true, ...(target.textRange ? { rect: () => target.textRange.getBoundingClientRect() } : {}) });
             });
           });
         });
         document.documentElement.append(existingLayer);
-      }
+      };
+      if (inspectionPattern) drawExistingMatches();
       const scope = inspectionKind === 'target' ? resolvedScope() : null;
       const scopeBox = scope ? document.createElement('div') : null;
       if (scopeBox) {
@@ -2243,12 +2982,12 @@
       let selectionFrame = 0;
       const updateSelectionBoxes = () => {
         selectionFrame = 0;
-        trackedBoxes.forEach(({ element, box }) => {
+        trackedBoxes.forEach(({ element, box, rect: rangeRect }) => {
           if (!element.isConnected) {
             box.style.display = 'none';
             return;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = rangeRect ? rangeRect() : element.getBoundingClientRect();
           Object.assign(box.style, { display: 'block', left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
         if (scopeBox && scope?.isConnected) {
@@ -2260,12 +2999,29 @@
       const scheduleSelectionUpdate = () => {
         if (!selectionFrame) selectionFrame = requestAnimationFrame(updateSelectionBoxes);
       };
+      // While the page scrolls, the boxes are hidden rather than moved each frame (each move measures the page again), and
+      // drawn where they are once it pauses.
+      let scrollPause = 0;
+      const hideSelectionWhileScrolling = (event) => {
+        if (event.target instanceof Element && isInspectorElement(event.target)) return;
+        if (!scrollPause) {
+          trackedBoxes.forEach(({ box }) => { box.style.display = 'none'; });
+          if (scopeBox) scopeBox.style.display = 'none';
+          document.getElementById('hvy-galaxy-inspector-highlight')?.remove();
+        }
+        clearTimeout(scrollPause);
+        scrollPause = setTimeout(() => {
+          scrollPause = 0;
+          scheduleSelectionUpdate();
+        }, 150);
+      };
       updateSelectionBoxes();
-      document.addEventListener('scroll', scheduleSelectionUpdate, true);
+      document.addEventListener('scroll', hideSelectionWhileScrolling, true);
       window.addEventListener('resize', scheduleSelectionUpdate);
       selectionOverlayCleanup = () => {
-        document.removeEventListener('scroll', scheduleSelectionUpdate, true);
+        document.removeEventListener('scroll', hideSelectionWhileScrolling, true);
         window.removeEventListener('resize', scheduleSelectionUpdate);
+        clearTimeout(scrollPause);
         if (selectionFrame) cancelAnimationFrame(selectionFrame);
         document.querySelectorAll('[data-collection-selection="true"]').forEach((element) => element.remove());
       };
@@ -2276,15 +3032,65 @@
       const statusText = document.createElement('span');
       statusText.dataset.inspectorStatusText = 'true';
       statusText.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-      const activeStatusText = inspectionKind === 'scope'
-        ? 'Galaxy: choose an optional page section'
+      // What is being picked: said by whoever asked (a site setup says "the box around one job"), or in general terms.
+      const activeStatusText = options.prompt || (inspectionKind === 'scope'
+        ? 'Choose an optional page section'
         : inspectionKind === 'parent'
-          ? options.existingPattern ? 'Galaxy: add example · green passes · orange/red needs attention' : 'Galaxy: select a parent'
-          : 'Galaxy: select target data';
+          ? options.existingPattern ? 'Add an example · green passes · orange or red needs attention' : 'Select the box around one record'
+          : 'Select the data to read');
       statusText.textContent = activeStatusText;
+      rangeStart = null;
+      rangeKeptEnd = null;
+      rangeEditing = false;
+      rangeMode = false;
+      rangeStatus = () => { statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : activeStatusText); };
+      recordChoice = options.recordChoice && inspectionPattern
+        ? { matches: findPatternMatches(inspectionPattern), refuse: () => { statusText.textContent = options.recordChoice.refuse || 'Pick one of the records boxed in green.'; } }
+        : null;
+      // A page that draws its list after it loads (or loads more as it goes): once it has been still for half a second,
+      // its matches are found and boxed again, and a record picked by a click is one of those. The inspector's own
+      // boxes and bars changing are not the page changing.
+      if (inspectionPattern) {
+        const ownChange = (change) => (change.target instanceof Element && isInspectorElement(change.target))
+          || [...change.addedNodes, ...change.removedNodes].every((node) => node instanceof Element && isInspectorElement(node));
+        let settled = 0;
+        const pageChanged = new MutationObserver((changes) => {
+          if (changes.every(ownChange)) return;
+          clearTimeout(settled);
+          settled = setTimeout(() => {
+            drawExistingMatches();
+            if (recordChoice) recordChoice.matches = findPatternMatches(inspectionPattern);
+            updateSelectionBoxes();
+          }, 500);
+        });
+        pageChanged.observe(document.documentElement, { childList: true, subtree: true });
+        const previousCleanup = selectionOverlayCleanup;
+        selectionOverlayCleanup = () => {
+          pageChanged.disconnect();
+          clearTimeout(settled);
+          previousCleanup?.();
+        };
+      }
+      const rangeEdit = inspectionKind === 'target' && options.rangeEdit?.snapshot?.range ? options.rangeEdit : null;
+      if (rangeEdit) {
+        const { snapshot: edited, boundary } = rangeEdit;
+        const kept = rangeBoundaryElement(boundary === 'end' ? edited.selected : edited.range.end.selected);
+        if (!kept) {
+          statusText.textContent = `The range's ${boundary === 'end' ? 'start' : 'end'} is not in this item · pick the field again`;
+        } else if (boundary === 'end') {
+          rangeEditing = true;
+          rangeStart = { element: kept, includeStart: edited.range.includeStart === true, status: 'Pick where the range ends' };
+          statusText.textContent = rangeStart.status;
+        } else {
+          rangeEditing = true;
+          rangeKeptEnd = { element: kept, includeEnd: edited.range.includeEnd === true };
+          statusText.textContent = 'Pick where the range starts';
+        }
+      }
       const navigationButton = document.createElement('button');
       navigationButton.type = 'button';
       navigationButton.textContent = 'Navigate page';
+      navigationButton.dataset.toolbarId = 'navigate';
       navigationButton.style.cssText = 'height:36px;padding:0 10px;border:1px solid #ff806d;border-radius:7px;background:#5f2922;color:#fff;font:600 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap';
       navigationButton.addEventListener('click', (event) => {
         event.preventDefault();
@@ -2293,7 +3099,7 @@
         shield.style.pointerEvents = pickingPaused ? 'none' : 'auto';
         navigationButton.textContent = pickingPaused ? 'Resume picking' : 'Navigate page';
         statusText.textContent = pickingPaused
-          ? 'Galaxy: page navigation enabled'
+          ? 'Page navigation enabled'
           : activeStatusText;
         if (pickingPaused) {
           document.getElementById('hvy-galaxy-inspector-picker')?.remove();
@@ -2301,6 +3107,30 @@
           highlighted = null;
         }
       });
+      // Use range: picks a field as a range, from where it starts to where it ends; Pick element (or Esc) goes back to
+      // picking elements. Not while a range picked before has a boundary picked again: that is a range already.
+      const rangeButton = inspectionKind === 'target' && !options.commandRecorder && !rangeEdit ? document.createElement('button') : null;
+      if (rangeButton) {
+        rangeButton.type = 'button';
+        rangeButton.dataset.toolbarId = 'range';
+        rangeButton.style.cssText = navigationButton.style.cssText;
+        rangeModeChanged = () => {
+          rangeButton.textContent = rangeMode ? 'Pick element' : 'Use range';
+        };
+        rangeModeChanged();
+        rangeButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          // Either way, picking: navigating the page ends.
+          if (pickingPaused) navigationButton.click();
+          if (!exitRangeMode()) {
+            rangeMode = true;
+            rangeModeChanged();
+            document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+            rangeStatus?.();
+          }
+        });
+      }
       if (options.commandRecorder) {
         status.style.cssText = 'position:fixed;z-index:2147483647;top:12px;right:12px;width:min(460px,calc(100vw - 24px));display:grid;gap:10px;padding:14px;border:1px solid #f08c7c;border-radius:12px;background:#20232a;color:#fff;box-shadow:0 10px 32px #0008;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;pointer-events:auto';
         statusText.style.cssText = 'display:block;white-space:normal;font-weight:650;line-height:1.4';
@@ -2313,10 +3143,13 @@
         let currentResolution = null;
         let parameterStepCount = 0;
         let currentSelection = null;
+        let recorderButtonCount = 0;
         const recorderButton = (label, primary = false) => {
           const button = document.createElement('button');
           button.type = 'button';
           button.textContent = label;
+          button.dataset.toolbarId = `recorder-${++recorderButtonCount}`;
+          if (primary) button.dataset.toolbarPrimary = 'true';
           button.style.cssText = `min-height:34px;padding:6px 10px;border:1px solid ${primary ? '#ff8d79' : '#626974'};border-radius:7px;background:${primary ? '#d95640' : '#30343d'};color:#fff;font:600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:pointer`;
           return button;
         };
@@ -2347,32 +3180,83 @@
           const gestures = [['click', 'Click'], ['double-click', 'Double click'], ['right-click', 'Right click'], ['type', 'Enter text'], ['select', 'Choose option']];
           gestures.forEach(([gesture, label]) => {
             const button = recorderButton(label, gesture === 'click');
-            button.addEventListener('click', () => {
-              currentGesture = gesture;
-              inspectionKind = 'target';
+            button.addEventListener('click', () => startPicking(gesture, `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : gesture === 'select' ? 'dropdown or combobox' : `${label.toLocaleLowerCase()} target`}.`));
+            controls.append(button);
+          });
+          showCancel();
+        };
+        const startPicking = (gesture, prompt) => {
+          currentGesture = gesture;
+          inspectionKind = 'target';
+          setRecorderPicking(true);
+          controls.replaceChildren();
+          statusText.textContent = prompt;
+          const pause = recorderButton('Pause to navigate');
+          let navigating = false;
+          pause.addEventListener('click', () => {
+            navigating = !navigating;
+            if (navigating) {
+              pickingPaused = true;
+              shield.style.pointerEvents = 'none';
+              pause.textContent = 'Resume selecting';
+              statusText.textContent = 'Page navigation is enabled. Resume when the target is visible.';
+            } else {
               setRecorderPicking(true);
-              controls.replaceChildren();
-              statusText.textContent = `Step ${steps.length + 1}: select the ${gesture === 'type' ? 'text field' : gesture === 'select' ? 'dropdown or combobox' : `${label.toLocaleLowerCase()} target`}.`;
-              const pause = recorderButton('Pause to navigate');
-              let navigating = false;
-              pause.addEventListener('click', () => {
-                navigating = !navigating;
-                if (navigating) {
-                  pickingPaused = true;
-                  shield.style.pointerEvents = 'none';
-                  pause.textContent = 'Resume selecting';
-                  statusText.textContent = 'Page navigation is enabled. Resume when the target is visible.';
-                } else {
-                  setRecorderPicking(true);
-                  pause.textContent = 'Pause to navigate';
-                  statusText.textContent = `Step ${steps.length + 1}: select the target.`;
-                }
-              });
-              controls.append(pause);
-              showCancel();
+              pause.textContent = 'Pause to navigate';
+              statusText.textContent = prompt;
+            }
+          });
+          controls.append(pause);
+          showCancel();
+        };
+        // A recording that is one known pick (the site setup's next page): the gesture is given, so there is nothing to
+        // choose, and the pick is the whole command. It is not performed: the list stays on its first page.
+        // It may first ask which kind of pick it is (a list's next page: its Next link, or its page numbers), from the
+        // asker's choices; the recording says which was chosen.
+        const pickOptions = options.commandRecorder.pick || null;
+        // What is typed and chosen is kept as recorded, and nothing is asked each run: a site setup's steps to its list.
+        const keepValues = options.commandRecorder.keepValues === true;
+        let currentTypedValue = '';
+        let singlePick = pickOptions && !pickOptions.choices ? pickOptions : null;
+        const renderPickChoices = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = pickOptions.question;
+          pickOptions.choices.forEach((choice) => {
+            const button = recorderButton(choice.label);
+            button.addEventListener('click', () => {
+              singlePick = choice;
+              startSinglePick();
             });
             controls.append(button);
           });
+          showCancel();
+        };
+        const startSinglePick = () => {
+          startPicking(singlePick.gesture, singlePick.prompt);
+          if (!pickOptions.choices) return;
+          const back = recorderButton('Back');
+          back.addEventListener('click', renderPickChoices);
+          controls.prepend(back);
+        };
+        const renderSinglePickConfirmation = () => {
+          clearRecorderInput();
+          setRecorderPicking(false);
+          controls.replaceChildren();
+          statusText.textContent = currentResolution.status === 'matched'
+            ? singlePick.confirm
+            : currentResolution.status === 'ambiguous'
+              ? 'More than one control looks like this one. Pick another.'
+              : singlePick.pageNumber ? 'Pick one of the page numbers, such as 2.' : 'Galaxy could not find this again on the page. Pick another.';
+          if (currentResolution.status === 'matched') {
+            const use = recorderButton('Use this', true);
+            use.addEventListener('click', finishWithoutPerforming);
+            controls.append(use);
+          }
+          const retry = recorderButton('Pick again', currentResolution.status !== 'matched');
+          retry.addEventListener('click', startSinglePick);
+          controls.append(retry);
           showCancel();
         };
         const renderAfterStep = () => {
@@ -2394,7 +3278,8 @@
           steps.push({
             gesture: currentGesture,
             target: currentTarget,
-            ...(currentGesture === 'type' ? { inputId: `input-${++parameterStepCount}` } : {}),
+            // Typed: kept as typed where the recording keeps its values (`keepValues`); else a parameter, asked each run.
+            ...(currentGesture === 'type' ? (keepValues ? { value: currentTypedValue } : { inputId: `input-${++parameterStepCount}` }) : {}),
             ...(currentGesture === 'select' && currentSelection?.askEachRun ? {
               inputId: `input-${++parameterStepCount}`,
               options: currentSelection.options,
@@ -2412,18 +3297,20 @@
         };
         const finishWithoutPerforming = () => {
           appendRecordedStep();
-          publish({ kind: 'integration-command-recording', steps });
+          publish({ kind: 'integration-command-recording', steps, ...(singlePick?.pagination ? { pagination: singlePick.pagination } : {}) });
           window.__hvyGalaxyInspector.stop();
         };
         const renderSampleInput = () => {
           clearRecorderInput();
           setRecorderPicking(false);
           controls.replaceChildren();
-          statusText.textContent = `Step ${steps.length + 1}: enter a temporary value to verify text entry.`;
+          statusText.textContent = keepValues
+            ? `Step ${steps.length + 1}: enter what to type.`
+            : `Step ${steps.length + 1}: enter a temporary value to verify text entry.`;
           const input = document.createElement('textarea');
           input.rows = 3;
           input.dataset.commandRecorderInput = 'true';
-          input.placeholder = 'Temporary sample value';
+          input.placeholder = keepValues ? 'What to type' : 'Temporary sample value';
           input.style.cssText = 'width:100%;resize:vertical;padding:8px;border:1px solid #747c88;border-radius:7px;background:#111318;color:#fff;font:13px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
           const run = recorderButton('Confirm typing', true);
           run.addEventListener('click', () => {
@@ -2435,6 +3322,7 @@
               statusText.textContent = 'This target no longer accepts text. Select it again.';
               return;
             }
+            currentTypedValue = input.value;
             recordConfirmedStep();
           });
           status.insertBefore(input, controls);
@@ -2512,10 +3400,11 @@
           };
           const fixed = recorderButton('Use this value', true);
           fixed.addEventListener('click', () => { void finish(false); });
-          const parameter = recorderButton('Ask each run');
-          parameter.addEventListener('click', () => { void finish(true); });
+          // A recording that keeps its values asks nothing each run.
+          const parameter = keepValues ? null : recorderButton('Ask each run');
+          parameter?.addEventListener('click', () => { void finish(true); });
           status.insertBefore(input, controls);
-          controls.append(fixed, parameter);
+          controls.append(fixed, ...(parameter ? [parameter] : []));
           showCancel();
           input.focus();
         };
@@ -2541,7 +3430,7 @@
           statusText.textContent = currentGesture === 'type' || currentGesture === 'select'
             ? `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence.`
             : `Step ${steps.length + 1}: target resolved uniquely at ${Math.round(currentResolution.score * 100)}% confidence. Choose whether to perform it or finish recording without changing the page.`;
-          const confirm = recorderButton(currentGesture === 'type' ? 'Continue to sample' : currentGesture === 'select' ? 'Choose value' : `Perform ${currentGesture}`);
+          const confirm = recorderButton(currentGesture === 'type' ? 'Enter value' : currentGesture === 'select' ? 'Choose value' : `Perform ${currentGesture}`);
           confirm.addEventListener('click', () => {
             if (currentGesture === 'type') {
               renderSampleInput();
@@ -2584,10 +3473,15 @@
             currentTarget = result;
             const scope = options.commandRecorder.scope === 'record' ? resolvedScope() : document;
             const minimumTargetConfidence = patternThresholds(options.commandRecorder.pattern || {}).minimumTargetConfidence;
-            currentResolution = scope
-              ? resolveInteractionTarget(scope, result, minimumTargetConfidence, currentGesture)
-              : { status: 'no_match', reason: 'record_not_found' };
-            renderTargetConfirmation();
+            // A page number is found again by its number, as runs find the next one.
+            const pageNumber = singlePick?.pageNumber ? pageNumberText(element) : null;
+            currentResolution = !scope
+              ? { status: 'no_match', reason: 'record_not_found' }
+              : singlePick?.pageNumber && pageNumber === null
+                ? { status: 'no_match', reason: 'not_a_page_number' }
+                : resolveInteractionTarget(scope, result, minimumTargetConfidence, currentGesture, pageNumber);
+            if (pickOptions) renderSinglePickConfirmation();
+            else renderTargetConfirmation();
           },
         };
         if (options.commandRecorder.scope === 'record') {
@@ -2595,12 +3489,45 @@
           statusText.textContent = 'Select one matching record to scope this command.';
           controls.replaceChildren();
           showCancel();
+        } else if (pickOptions?.choices) {
+          renderPickChoices();
+        } else if (pickOptions) {
+          startSinglePick();
         } else {
           renderChooseGesture();
         }
         status.append(statusText, controls);
       } else {
-        status.append(statusText, navigationButton);
+        status.append(statusText, navigationButton, ...(rangeButton ? [rangeButton] : []));
+      }
+      if (matchingView) {
+        // Says how close it came; Add as example goes on to add the page to its setup, Close leaves it.
+        statusText.textContent = `${options.prompt ? `${options.prompt} · ` : ''}${matchingSummary}`;
+        const matchingButton = (label, id, onClick, primary = false) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          button.dataset.toolbarId = id;
+          if (primary) button.dataset.toolbarPrimary = 'true';
+          button.style.cssText = navigationButton.style.cssText;
+          button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+          });
+          return button;
+        };
+        status.append(
+          matchingButton('Add as example', 'add-example', () => {
+            publish({ kind: 'integration-matching-add-example', ...(inspectionContext ? { context: inspectionContext } : {}) });
+            window.__hvyGalaxyInspector.stop();
+          }, true),
+          matchingButton('Close', 'close', () => {
+            if (host.cancel) host.cancel();
+            else window.location.href = messageUrl('inspection-cancel');
+            window.__hvyGalaxyInspector.stop();
+          }),
+        );
       }
       if (!options.commandRecorder && inspectionKind === 'target' && options.multiSelect) {
         const selectedItems = [];
@@ -2614,43 +3541,125 @@
         undoButton.textContent = 'Undo last';
         undoButton.disabled = true;
         undoButton.style.cssText = doneButton.style.cssText;
-        const updateCollectionStatus = () => {
-          statusText.textContent = selectedItems.length
-            ? `Galaxy: ${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
-            : 'Galaxy: select fields, or choose Done to cancel';
-          undoButton.disabled = selectedItems.length === 0;
-          if (externalToolbar) {
-            publishToolbarState({
-              active: true,
-              status: statusText.textContent,
-              navigationLabel: pickingPaused ? 'Resume picking' : 'Navigate page',
-              canUndo: selectedItems.length > 0,
-            });
-          }
+        // Picking the first example's fields, the box picked just before is the last thing to undo: with no fields
+        // picked, Undo last goes back to picking the box.
+        const undoesParent = Boolean(options.undoParent);
+        // With the fields there are to fill (a site setup's collection: Title, Company, Pay…), each is a pill, there as
+        // picking goes, filled once a pick is that field, so nothing has to be remembered. Each pick is asked which it is:
+        // the pills not yet filled are what answer it, or Skip, to assign it later in the builder. The answer goes with the
+        // pick (`fieldId`). The toolbar shows the pills as pills (`data-toolbar-pill`).
+        const fieldChoices = Array.isArray(options.fieldChoices) ? options.fieldChoices.filter((choice) => choice?.id && choice?.label) : [];
+        let assigning = null;
+        const fieldPills = fieldChoices.map((choice, index) => {
+          const pill = document.createElement('button');
+          pill.type = 'button';
+          pill.textContent = choice.label;
+          pill.dataset.toolbarId = `field-${index}`;
+          pill.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!assigning || pill.dataset.toolbarPill === 'picked') return;
+            assigning.result.fieldId = choice.id;
+            finishAssigning();
+          });
+          return pill;
+        });
+        const skipButton = document.createElement('button');
+        skipButton.type = 'button';
+        skipButton.textContent = 'Skip';
+        skipButton.dataset.toolbarId = 'field-skip';
+        skipButton.hidden = true;
+        skipButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          finishAssigning();
+        });
+        const updateFieldPills = () => {
+          const taken = new Set(selectedItems.map((item) => item.result.fieldId).filter(Boolean));
+          fieldPills.forEach((pill, index) => {
+            const picked = taken.has(fieldChoices[index].id);
+            pill.dataset.toolbarPill = picked ? 'picked' : 'open';
+            pill.setAttribute('aria-pressed', String(picked));
+            // Answers which field a pick is: those not yet filled, while one is asked.
+            pill.disabled = !assigning || picked;
+            pill.style.cssText = `padding:4px 9px;border:1px solid #fff;border-radius:999px;font:700 11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;cursor:${pill.disabled ? 'default' : 'pointer'};${picked ? 'background:#fff;color:#8b2d20' : 'background:transparent;color:#fff'}`;
+          });
         };
+        const updateCollectionStatus = () => {
+          updateFieldPills();
+          statusText.textContent = rangeStart?.status || (rangeMode ? RANGE_MODE_STATUS : assigning
+            ? `Which field is this? “${(assigning.result.range?.summary || assigning.result.textPreview || visibleText(assigning.element)).slice(0, 80)}”`
+            : fieldChoices.length
+              ? `${options.prompt || 'Pick what to read'}${selectedItems.length ? ' · then Done' : ''}`
+              : selectedItems.length
+                ? `${selectedItems.length} ${selectedItems.length === 1 ? 'field' : 'fields'} selected`
+                : options.prompt || (undoesParent ? 'Select fields, or Undo last to pick the box again' : 'Select fields, or choose Done to cancel'));
+          undoButton.disabled = selectedItems.length === 0 && !undoesParent && !rangeStart;
+        };
+        const finishAssigning = () => {
+          assigning = null;
+          skipButton.hidden = true;
+          navigationButton.hidden = false;
+          if (rangeButton) rangeButton.hidden = false;
+          doneButton.hidden = false;
+          if (wrongPageButton) wrongPageButton.hidden = false;
+          pickingPaused = false;
+          updateCollectionStatus();
+        };
+        // The page waits for the answer: picking is paused, and only the fields not yet filled, Skip, and Undo last are
+        // offered.
+        const askField = (item) => {
+          assigning = item;
+          pickingPaused = true;
+          document.getElementById('hvy-galaxy-inspector-picker')?.remove();
+          navigationButton.hidden = true;
+          if (rangeButton) rangeButton.hidden = true;
+          doneButton.hidden = true;
+          if (wrongPageButton) wrongPageButton.hidden = true;
+          skipButton.hidden = false;
+          updateCollectionStatus();
+        };
+        navigationButton.addEventListener('click', () => { if (!pickingPaused) updateCollectionStatus(); });
+        rangeStatus = updateCollectionStatus;
         targetCollection = {
-          add(element, result) {
-            if (selectedElements.has(element)) return;
-            selectedElements.add(element);
+          // A range is boxed over its text. It may start at an element already picked as a field (the title it starts after).
+          add(element, result, textRange = null) {
+            // An element is picked once whole; a part of its text (or its own text) is a field of its own, as a range is.
+            const whole = !textRange && !result.textPart && !result.ownText;
+            if (whole && selectedElements.has(element)) return;
+            if (whole) selectedElements.add(element);
             const box = document.createElement('div');
             box.dataset.collectionSelection = 'true';
             box.style.cssText = 'position:fixed;z-index:2147483645;pointer-events:none;border:3px solid #27865f;background:#27865f1f;box-sizing:border-box;color:#fff;font:11px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif';
             box.textContent = `${selectedItems.length + 1}`;
             box.style.padding = '3px 5px';
             document.documentElement.append(box);
-            const tracked = { element, box };
+            const tracked = { element, box, ...(textRange ? { rect: () => textRange.getBoundingClientRect() } : {}) };
             trackedBoxes.push(tracked);
-            selectedItems.push({ element, result, tracked });
+            const item = { element, result, tracked, textRange };
+            selectedItems.push(item);
             updateSelectionBoxes();
-            updateCollectionStatus();
+            if (fieldChoices.length) askField(item);
+            else updateCollectionStatus();
           },
+        };
+        undoLastPick = () => {
+          if (selectedItems.length) undoButton.click();
         };
         undoButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
+          // Picking a range's end: the range's start is what was picked last.
+          if (cancelRange()) return;
           const removed = selectedItems.pop();
+          if (!removed && undoesParent) {
+            publish({ kind: 'integration-target-collection-undo-parent' });
+            window.__hvyGalaxyInspector.stop();
+            return;
+          }
           if (!removed) return;
-          selectedElements.delete(removed.element);
+          if (removed === assigning) finishAssigning();
+          if (!removed.textRange && !removed.result.textPart && !removed.result.ownText) selectedElements.delete(removed.element);
           removed.tracked.box.remove();
           const trackedIndex = trackedBoxes.indexOf(removed.tracked);
           if (trackedIndex >= 0) trackedBoxes.splice(trackedIndex, 1);
@@ -2659,19 +3668,55 @@
         doneButton.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
-          publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
+          if (options.deriveParent && selectedItems.length) {
+            publish({ kind: 'integration-target-collection', ...recordAround(selectedItems.map((item) => item.result)) });
+          } else {
+            publish({ kind: 'integration-target-collection', items: selectedItems.map((item) => item.result) });
+          }
           window.__hvyGalaxyInspector.stop();
         });
-        toolbarControl = (action) => {
-          if (action === 'navigate') navigationButton.click();
-          if (action === 'undo') undoButton.click();
-          if (action === 'done') doneButton.click();
-          if (action === 'navigate') updateCollectionStatus();
-        };
-        if (!externalToolbar) status.append(undoButton, doneButton);
+        undoButton.dataset.toolbarId = 'undo';
+        doneButton.dataset.toolbarId = 'done';
+        doneButton.dataset.toolbarPrimary = 'true';
+        // An item a site setup just opened from its list may not be the item (a company's page): Wrong page goes back
+        // to the list, to click what opens one again.
+        const wrongPageButton = options.wrongPage ? document.createElement('button') : null;
+        if (wrongPageButton) {
+          wrongPageButton.type = 'button';
+          wrongPageButton.textContent = 'Wrong page';
+          wrongPageButton.dataset.toolbarId = 'wrong-page';
+          wrongPageButton.style.cssText = doneButton.style.cssText;
+          wrongPageButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            publish({ kind: 'integration-wrong-page' });
+            window.__hvyGalaxyInspector.stop();
+          });
+        }
+        skipButton.style.cssText = doneButton.style.cssText;
+        status.append(...fieldPills, skipButton, ...(wrongPageButton ? [wrongPageButton] : []), undoButton, doneButton);
         updateCollectionStatus();
       }
-      if (!externalToolbar || options.commandRecorder || inspectionKind !== 'target' || !options.multiSelect) document.documentElement.append(status);
+      if (externalToolbar) mirrorStatusToToolbar(status, statusText);
+      else document.documentElement.append(status);
+      // A check that you're human can come up at any time, and picking takes every click: picking pauses for it, once, so
+      // the page takes clicks again, and says why. Passing it usually loads the page again, where picking starts over.
+      // Resumed by hand while the check still shows, picking stays resumed until the next check.
+      const pauseForHumanCheck = () => {
+        if (!active || options.commandRecorder) return;
+        if (!humanCheckOnPage()) {
+          humanCheckPaused = false;
+          return;
+        }
+        if (humanCheckPaused || pickingPaused) return;
+        humanCheckPaused = true;
+        navigationButton.click();
+        statusText.textContent = HUMAN_CHECK_STATUS;
+      };
+      humanCheckPaused = false;
+      clearInterval(humanCheckTimer);
+      humanCheckTimer = setInterval(pauseForHumanCheck, 1000);
+      pauseForHumanCheck();
       document.addEventListener('pointermove', pointerMove, true);
       document.addEventListener('mousemove', pointerMove, true);
       document.addEventListener('click', click, true);
@@ -2679,14 +3724,28 @@
     },
     stop() {
       active = false;
+      clearInterval(humanCheckTimer);
+      humanCheckTimer = null;
+      rangeStart = null;
+      rangeStatus = null;
+      rangeKeptEnd = null;
+      rangeEditing = false;
+      rangeMode = false;
+      rangeModeChanged = null;
       inspectionPattern = null;
+      matchingView = false;
       targetCollection = null;
+      undoLastPick = null;
       commandRecorder = null;
       commandRecordElements = null;
+      recordChoice = null;
       toolbarControl = null;
       inspectionContext = null;
       document.removeEventListener('pointermove', pointerMove, true);
       document.removeEventListener('mousemove', pointerMove, true);
+      cancelAnimationFrame(moveFrame);
+      moveFrame = 0;
+      pendingMove = null;
       document.removeEventListener('click', click, true);
       document.removeEventListener('keydown', keydown, true);
       removeUi();
@@ -2721,9 +3780,20 @@
       publish({ kind: 'integration-command-result', requestId: payload.requestId, commandId: payload.command?.id, ...result });
       return result;
     },
-    validateReadyChecksAndPublish(checks = {}, context = {}) {
+    async validateReadyChecksAndPublish(checks = {}, context = {}) {
       window.__hvyGalaxyInspector.stop();
-      const readiness = pageReadiness(checks);
+      // A site setup's list: its steps to get there taken first (`context.prepareCommand`), then the checks, given the
+      // page a few seconds to settle, as a run does: with steps or without, as a site may draw its list after it loads.
+      const ran = context.prepareCommand
+        ? await executeCommand({ command: context.prepareCommand, readyChecks: { urlMode: 'strict-domain', urlValue: location.hostname, elements: [] } })
+        : null;
+      const deadline = Date.now() + 5000;
+      let readiness = pageReadiness(checks);
+      while (!readiness.ready && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        readiness = pageReadiness(checks);
+      }
+      if (ran && ran.status !== 'executed') readiness = { ...readiness, ready: false, steps: ran };
       const layer = document.createElement('div');
       layer.id = 'hvy-galaxy-ready-check-matches';
       layer.style.cssText = 'position:fixed;inset:0;z-index:2147483646;pointer-events:none';
@@ -2741,18 +3811,25 @@
         caption.style.cssText = `display:inline-block;padding:3px 6px;background:${color};color:#fff`;
         box.append(caption);
         layer.append(box);
-        overlays.push({ element: match.element, box });
+        overlays.push({ check, element: match.element, box });
       });
       document.documentElement.append(layer);
       let updateFrame = 0;
       const updateOverlays = () => {
         updateFrame = 0;
-        overlays.forEach(({ element, box }) => {
-          if (!element.isConnected) {
-            box.style.display = 'none';
-            return;
+        overlays.forEach((overlay) => {
+          const { box } = overlay;
+          // A page that draws its parts again (a sticky header as it scrolls, a list loading more) replaces the element:
+          // it is found again by its snapshot, as the check found it.
+          if (!overlay.element.isConnected) {
+            const again = resolveInteractionTarget(document, overlay.check.snapshot, 0.8, 'click');
+            if (again.status !== 'matched') {
+              box.style.display = 'none';
+              return;
+            }
+            overlay.element = again.element;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = overlay.element.getBoundingClientRect();
           box.style.display = rect.width && rect.height ? 'block' : 'none';
           Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
@@ -2763,9 +3840,15 @@
       updateOverlays();
       document.addEventListener('scroll', scheduleOverlayUpdate, true);
       window.addEventListener('resize', scheduleOverlayUpdate);
+      // And as the page changes without scrolling (its parts drawn again).
+      const pageChanges = new MutationObserver((changes) => {
+        if (changes.some((change) => !layer.contains(change.target))) scheduleOverlayUpdate();
+      });
+      pageChanges.observe(document.documentElement, { childList: true, subtree: true });
       matchOverlayCleanup = () => {
         document.removeEventListener('scroll', scheduleOverlayUpdate, true);
         window.removeEventListener('resize', scheduleOverlayUpdate);
+        pageChanges.disconnect();
         if (updateFrame) cancelAnimationFrame(updateFrame);
       };
       const result = {
@@ -2774,6 +3857,24 @@
         page: { origin: location.origin, pathname: location.pathname },
         ...readiness,
       };
+      // Said on the toolbar where asked (`context.toolbar`, a site setup's Test), with Done to clear the boxes: the test
+      // is over, its result in view as the page is looked at.
+      if (context.toolbar) {
+        const checked = readiness.elements.length;
+        const passing = readiness.elements.filter((element) => element.ready).length;
+        const status = readiness.steps
+          ? `Test failed: step ${(readiness.steps.stepIndex ?? 0) + 1} didn’t run.`
+          : readiness.ready
+            ? `Test passed: ${passing} of ${checked} ready ${checked === 1 ? 'check passes' : 'checks pass'}.`
+            : `Test failed: ${readiness.message}`;
+        publishToolbarState({ active: true, status, buttons: [{ id: 'end-test', label: 'Done', primary: true, disabled: false }] });
+        toolbarControl = (id) => {
+          if (id !== 'end-test') return;
+          toolbarControl = null;
+          removeUi();
+          publishToolbarState({});
+        };
+      }
       publish(result);
       return result;
     },
@@ -2784,6 +3885,10 @@
     },
     async extractAndPublish(pattern = {}, context = {}) {
       const runId = ++extractionRun;
+      stopLiveExampleWatch();
+      // A site setup's list is read where runs read it (`prepareList`).
+      if (context.prepareList) await getListThere(context.prepareList);
+      if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
       const checks = context.readyChecks || { urlMode: 'strict-url', urlValue: location.href, elements: [] };
       const readiness = await waitForPageReadiness(checks);
       if (runId !== extractionRun) return { status: 'cancelled', matches: 0, records: [] };
@@ -2817,10 +3922,13 @@
         page: { origin: location.origin, pathname: location.pathname },
         ...extraction,
       });
+      // Saved examples not found yet are looked for in what the page adds, told by the record type, not this request.
+      if (context.mode === 'examples' && extraction.status !== 'not-ready') watchLiveExamples(pattern, [...extraction.records], { mode: 'live-examples', actionId: context.actionId ?? null });
       return extraction;
     },
     cancelExtraction() {
       extractionRun += 1;
+      stopLiveExampleWatch();
     },
     extractAcrossPage(pattern = {}) {
       return extractAcrossPage(pattern);
@@ -2836,6 +3944,12 @@
       return { matches: selected.length, records: selected };
     },
     matchAndHighlight(pattern = {}) {
+      // On a site setup's list, its matches are highlighted where runs read it (`prepareList`).
+      if (pattern.prepareList) {
+        const { prepareList, ...matching } = pattern;
+        void getListThere(prepareList).then(() => window.__hvyGalaxyInspector.matchAndHighlight(matching));
+        return;
+      }
       window.__hvyGalaxyInspector.stop();
       const layer = document.createElement('div');
       layer.id = 'hvy-galaxy-pattern-matches';
@@ -2845,12 +3959,12 @@
       let updateFrame = 0;
       const updateOverlays = () => {
         updateFrame = 0;
-        overlays.forEach(({ element, box }) => {
+        overlays.forEach(({ element, box, rect: rangeRect }) => {
           if (!element.isConnected) {
             box.style.display = 'none';
             return;
           }
-          const rect = element.getBoundingClientRect();
+          const rect = rangeRect ? rangeRect() : element.getBoundingClientRect();
           box.style.display = rect.width && rect.height ? 'block' : 'none';
           Object.assign(box.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
         });
@@ -2916,7 +4030,7 @@
           const position = left.element.compareDocumentPosition(right.element);
           return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : position & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
         });
-        const addBox = (element, color, label, width, kind, recordIndex) => {
+        const addBox = (element, color, label, width, kind, recordIndex, textRange = null) => {
           const box = document.createElement('div');
           box.dataset.matchKind = kind;
           box.dataset.matchIndex = String(recordIndex + 1);
@@ -2926,14 +4040,17 @@
           caption.style.cssText = `display:inline-block;padding:2px 5px;background:${color};color:#fff`;
           box.append(caption);
           layer.append(box);
-          overlays.push({ element, box });
+          overlays.push({ element, box, ...(textRange ? { rect: () => textRange.getBoundingClientRect() } : {}) });
           return box;
         };
         visualMatches.forEach((match, recordIndex) => {
           addBox(match.element, '#3478d4', `Match ${recordIndex + 1} · ${Math.round(match.score * 100)}%`, 2, 'parent', recordIndex);
           match.matchedTargets
             .filter((target) => target.element && target.score >= match.minimumTargetConfidence)
-            .forEach((target) => target.elements.forEach((item) => addBox(item.element, '#e0563f', target.label || 'Unlabeled target', 3, 'target', recordIndex)));
+            .forEach((target) => target.textRange
+              // A range field is one box over its text, with its length, so a range that swallowed the footer stands out.
+              ? addBox(target.element, '#e0563f', `${target.label || 'Unlabeled target'} · ${readableText(null, target.textRange).length.toLocaleString()} characters`, 3, 'target', recordIndex, target.textRange)
+              : target.elements.forEach((item) => addBox(item.element, '#e0563f', target.label || 'Unlabeled target', 3, 'target', recordIndex)));
         });
         confidenceOutput.textContent = `${slider.value}%`;
         statusText.textContent = currentAccepted.length
@@ -2984,6 +4101,8 @@
         liveMinimumConfidence = currentPattern.minimumConfidence;
         renderMatches();
       });
+      // Let go, the record type being built takes it as its minimum match confidence.
+      slider.addEventListener('change', () => publish({ kind: 'integration-pattern-confidence', minimumConfidence: currentPattern.minimumConfidence }));
       status.append(statusText, slider, confidenceOutput, scopeButton, compareButton, comparison);
       document.documentElement.append(status);
       renderMatches();

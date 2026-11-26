@@ -54,6 +54,10 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.closeDebugLog();
           return;
         }
+        if (backdrop.querySelector('.background-activity-dialog')) {
+          handlers.closeBackgroundActivity();
+          return;
+        }
         if (backdrop.querySelector('.document-key-dialog')) {
           if (state.documentKeyImportDialogOpen) handlers.cancelImportDocumentKeys();
           else if (state.documentKeyDeleteId) handlers.cancelDeleteDocumentKey();
@@ -134,12 +138,16 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
           handlers.cancelRenameFile();
           return;
         }
-        if (backdrop.querySelector('form[data-form="rename-encrypted-folder"]')) {
-          handlers.cancelRenameEncryptedFolder();
+        if (backdrop.querySelector('form[data-form="rename-folder"]')) {
+          handlers.cancelRenameFolder();
           return;
         }
         if (backdrop.querySelector('form[data-form="new-folder"]')) {
           handlers.cancelNewFolder();
+          return;
+        }
+        if (backdrop.querySelector('.archive-file-dialog')) {
+          handlers.cancelArchiveFile();
           return;
         }
         if (backdrop.querySelector('.delete-file-dialog')) {
@@ -246,6 +254,8 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'set-workspace-filter-mode' && isWorkspaceFilterMode(target.dataset.filterMode)) handlers.setWorkspaceFilterMode(target.dataset.filterMode);
     if (action === 'set-workspace-filter-behavior' && isWorkspaceFilterBehavior(target.dataset.filterBehavior)) handlers.setWorkspaceFilterBehavior(target.dataset.filterBehavior);
     if (action === 'clear-workspace-filter') handlers.clearWorkspaceFilter();
+    if (action === 'archive-file') handlers.archiveFile();
+    if (action === 'cancel-archive-file') handlers.cancelArchiveFile();
     if (action === 'delete-file') handlers.deleteFile();
     if (action === 'cancel-delete-file') handlers.cancelDeleteFile();
     if (action === 'delete-folder') handlers.deleteWorkspaceFolder(state.deleteFolderWorkspacePath ?? '', state.deleteFolderDirectory);
@@ -259,7 +269,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       handlers.openIntegration(target.dataset.destination);
     }
     if (action === 'open-integration-page' && target.dataset.integrationId && target.dataset.pageId) {
-      handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
+      void handlers.openIntegrationPage(target.dataset.integrationId, target.dataset.pageId, target.dataset.profileId);
     }
     if (action === 'open-integration-ready-checks' && target.dataset.integrationId && target.dataset.pageId) handlers.openIntegrationReadyChecks(target.dataset.integrationId, target.dataset.pageId);
     if (action === 'cancel-integration-ready-checks') handlers.cancelIntegrationReadyChecks();
@@ -297,6 +307,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'confirm-discard-integration-action') handlers.confirmDiscardIntegrationAction();
     if (action === 'cancel-integration-action-selection') handlers.cancelIntegrationActionSelection();
     if (action === 'add-another-integration-action-example') handlers.addAnotherIntegrationActionExample(Number(target.dataset.parentIndex ?? 0), target.dataset.fieldIndex === undefined ? null : Number(target.dataset.fieldIndex));
+    if (action === 'change-integration-action-range') handlers.changeIntegrationActionRange(Number(target.dataset.parentIndex), Number(target.dataset.fieldIndex), target.dataset.boundary === 'end' ? 'end' : 'start');
     if (action === 'select-integration-action-example') handlers.selectIntegrationActionExample(Number(target.dataset.index));
     if (action === 'set-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), true);
     if (action === 'clear-integration-target-absent') handlers.setIntegrationTargetAbsent(Number(target.dataset.fieldIndex), Number(target.dataset.parentIndex), false);
@@ -314,11 +325,12 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       target.classList.toggle('is-active', required);
       target.setAttribute('aria-pressed', String(required));
     }
-    if (action === 'add-integration-action-anchor') handlers.addIntegrationActionAnchor();
+    if (action === 'add-integration-action-anchor') handlers.addIntegrationActionExample();
     if (action === 'limit-integration-action-to-section') handlers.limitIntegrationActionToSection();
     if (action === 'remove-integration-action-scope') handlers.removeIntegrationActionScope();
     if (action === 'test-integration-action-pattern') handlers.testIntegrationActionPattern();
     if (action === 'preview-integration-action') handlers.previewIntegrationAction();
+    if (action === 'stop-integration-action-preview') handlers.stopIntegrationActionPreview();
     if (action === 'continue-integration-action-builder') handlers.continueIntegrationActionBuilder();
     if (action === 'back-integration-action-builder') handlers.backIntegrationActionBuilder();
     if (action === 'save-integration-action-draft') handlers.saveIntegrationActionDraft();
@@ -326,6 +338,16 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'close-integration-action-result') handlers.closeIntegrationActionResult();
     if (action === 'add-command-for-integration-action' && target.dataset.integrationId && target.dataset.actionId) handlers.addCommandForIntegrationAction(target.dataset.integrationId, target.dataset.actionId);
     if (action === 'add-command-for-integration-page' && target.dataset.integrationId && target.dataset.pageId) handlers.addCommandForIntegrationPage(target.dataset.integrationId, target.dataset.pageId);
+    if (action === 'site-setup-step' && target.dataset.step) handlers.siteSetupStep(target.dataset.step);
+    if (action === 'site-setup-row-key' && target.dataset.field) handlers.siteSetupRowKey(target.dataset.field);
+    if (action === 'open-site-setup-prepare') handlers.openSiteSetupPrepare(true);
+    if (action === 'close-site-setup-prepare') handlers.openSiteSetupPrepare(false);
+    if (action === 'site-setup-prepare-step' && (target.dataset.step === 'record' || target.dataset.step === 'add-check' || target.dataset.step === 'test')) handlers.siteSetupPrepareStep(target.dataset.step);
+    if (action === 'remove-site-setup-prepare-step') handlers.removeSiteSetupPrepareStep(Number(target.dataset.stepIndex));
+    if (action === 'remove-site-setup-ready-check' && target.dataset.checkId) handlers.removeSiteSetupReadyCheck(target.dataset.checkId);
+    if (action === 'open-site-setup-test-value') handlers.openSiteSetupTestValue({ result: Number(target.dataset.result), field: Number(target.dataset.field) });
+    if (action === 'close-site-setup-test-value') handlers.openSiteSetupTestValue(null);
+    if (action === 'show-site-setup-test-matching') handlers.showSiteSetupTestMatching(Number(target.dataset.result));
     if (action === 'cancel-integration-command-builder') handlers.cancelIntegrationCommandBuilder();
     if (action === 'request-delete-integration-command' && target.dataset.integrationId && target.dataset.actionId && target.dataset.commandId) handlers.requestDeleteIntegrationCommand(target.dataset.integrationId, target.dataset.actionId, target.dataset.commandId);
     if (action === 'request-delete-integration-page-command' && target.dataset.integrationId && target.dataset.pageId && target.dataset.commandId) handlers.requestDeleteIntegrationPageCommand(target.dataset.integrationId, target.dataset.pageId, target.dataset.commandId);
@@ -413,6 +435,20 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'cancel-delete-document-key') handlers.cancelDeleteDocumentKey();
     if (action === 'close-document-key-manager') handlers.closeDocumentKeyManager();
     if (action === 'confirm-document-encryption') handlers.confirmDocumentEncryption();
+    if (action === 'review-plugin-approvals') handlers.openPluginApprovals();
+    if (action === 'cancel-plugin-approvals') handlers.cancelPluginApprovals();
+    if (action === 'open-background-activity') handlers.openBackgroundActivity();
+    if (action === 'close-background-activity') handlers.closeBackgroundActivity();
+    if (action === 'stop-background-run') handlers.stopBackgroundRun(target.dataset.path ?? '', target.dataset.runId ?? '');
+    if (action === 'pause-background-queue') handlers.pauseBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'resume-background-queue') handlers.resumeBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'pause-all-background-queues') handlers.pauseAllBackgroundQueues();
+    if (action === 'stop-background-queue') handlers.stopBackgroundQueue(target.dataset.path ?? '', target.dataset.queueId ?? '');
+    if (action === 'stop-all-background-work') handlers.stopAllBackgroundWork();
+    if (action === 'confirm-plugin-approvals') {
+      const dialog = target.closest<HTMLElement>('.plugin-approval-dialog');
+      handlers.allowPlugins([...(dialog?.querySelectorAll<HTMLInputElement>('input[data-plugin-acceptance-key]:checked') ?? [])].map((input) => input.dataset.pluginAcceptanceKey ?? ''));
+    }
     if (action === 'cancel-document-encryption') handlers.cancelDocumentEncryption();
     if (action === 'close-about') handlers.closeAbout();
     if (action === 'app-settings') handlers.openAppSettings();
@@ -431,6 +467,9 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'disable-homepage') handlers.disableHomepage();
     if (action === 'review-scripting') handlers.openScriptingReview();
     if (action === 'close-scripting-review') handlers.closeScriptingReview();
+    if (action === 'close-scheduled-jobs') handlers.closeScheduledJobs();
+    if (action === 'save-scheduled-jobs') handlers.saveScheduledJobs();
+    if (action === 'open-scheduled-document' && target.dataset.path) handlers.openScheduledDocument(target.dataset.path);
     if (action === 'allow-file-power-scripting' && target.dataset.path) {
       handlers.setWholeFilePowerScriptingAllowed(target.dataset.path, true);
     }
@@ -588,7 +627,7 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
     if (action === 'select-saved-version' && target.dataset.versionId) handlers.selectSavedVersion(target.dataset.versionId);
     if (action === 'close-version-history') handlers.closeVersionHistory();
     if (action === 'cancel-rename-file') handlers.cancelRenameFile();
-    if (action === 'cancel-rename-encrypted-folder') handlers.cancelRenameEncryptedFolder();
+    if (action === 'cancel-rename-folder') handlers.cancelRenameFolder();
     if (action === 'cancel-workspace-transfer') handlers.cancelWorkspaceTransfer();
     if (action === 'open-workspace') handlers.openWorkspace();
     if (action === 'open-file') handlers.openFile();
@@ -603,15 +642,19 @@ export function bindClickEvents(root: HTMLElement, handlers: UiHandlers, state: 
       event.stopPropagation();
       handlers.closeDocumentTab(target.dataset.path);
     }
+    if (action === 'open-recent-tab' && target.dataset.path) handlers.openRecentFile(target.dataset.path);
+    if (action === 'dismiss-recent-tab' && target.dataset.path) {
+      event.stopPropagation();
+      handlers.dismissRecentTab(target.dataset.path);
+    }
     if (action === 'select-tab-stack-item' && target.dataset.path !== undefined) handlers.selectDocumentTab(target.dataset.path);
     if (action === 'close-document') handlers.closeDocument();
     if (action === 'save-and-close-document') handlers.saveAndCloseDocument();
     if (action === 'close-document-without-saving') handlers.closeDocumentWithoutSaving();
-    if (action === 'discard-close-document-draft') handlers.discardCloseDocumentDraft();
-    if (action === 'review-close-document-later') handlers.reviewCloseDocumentLater();
     if (action === 'cancel-close-document') handlers.cancelCloseDocument();
     if (action === 'reload-external-file-change') handlers.reloadExternalFileChange();
     if (action === 'dismiss-external-file-change') handlers.dismissExternalFileChange();
+    if (action === 'dismiss-error') handlers.dismissError();
     if (action === 'confirm-save-conflict') handlers.confirmSaveConflict();
     if (action === 'cancel-save-conflict') handlers.cancelSaveConflict();
     if (action === 'save-before-workspace-file-operation') handlers.saveBeforeWorkspaceFileOperation();

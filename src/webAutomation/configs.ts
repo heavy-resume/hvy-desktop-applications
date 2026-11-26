@@ -1,0 +1,866 @@
+import type { CliItemStoreConfig, ItemFieldBinding } from './cliItemStore';
+import { readSiteSettings, RECORD_URL_FIELD, type CollectionDefinition, type CollectionField, type CollectionSite, type StartPage } from './collection';
+import { documentInputLinks, documentTextInputs, MAX_ENDPOINT_TIMEOUT_MS, type ApiEndpointDefinition } from './endpoints';
+import { DEFAULT_QUEUE_CONFIG, type QueueConfig, type QueueEntry, type QueueEntryStatus, type QueueState } from './queue';
+import type { ServedDocumentDefinition } from './servedDocuments';
+import type { RecordSinkConfig } from './recordSink';
+import { SQL_IDENTIFIER, type SqlItemStoreConfig } from './sqlItemStore';
+import { PUBLISHED_SERVICES_OFF, publishedService, publishedServices, SERVICE_MANIFEST_FORMAT } from './serviceManifests';
+import { validateScopeRule, type SitePatternDefinition } from './sitePatterns';
+import type { ResponseRule, SessionDefinition, WebApiCapability } from './webApi';
+import type { ResponseAction } from './errors';
+
+export const WEB_API_PLUGIN_ID = 'galaxy.web-api';
+export const WEB_COLLECTION_PLUGIN_ID = 'galaxy.web-collection';
+export const QUEUE_PLUGIN_ID = 'galaxy.queue';
+/** Ranks a document's rows by similarity (similarity.ts). Scripting only: it has no block. */
+export const SIMILARITY_PLUGIN_ID = 'galaxy.similarity';
+export const SCHEDULE_PLUGIN_ID = 'galaxy.schedule';
+/** Sets the browser profile for the web plugins in its section or container (profileContexts.ts). */
+export const WEB_PROFILE_CONTEXT_PLUGIN_ID = 'galaxy.web-profile-context';
+/** The version a document's plugin authorization is recorded against; a new version asks again. */
+export const WEB_AUTOMATION_PLUGIN_VERSION = '0.1.0';
+export const WEB_AUTOMATION_SCHEMA_VERSION = 1;
+
+/** The most a collection reads from one start page: list pages, and items listed. */
+export const LIMIT_BOUNDS = { maxPages: 50, maxItems: 500, duePagesPerRun: 100 } as const;
+/** How often a start page is checked unless set: every 7 days. */
+export const DEFAULT_CHECK_TIMING: ScheduleTiming = { every: 7 * 1440 };
+
+export type ConfigResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+/**
+ * MCP exposure is stored beside the snapshot and is not part of what the user approves for the document. A block that
+ * uses a service's published file names the service and the permissions it asks for (`service`); its capability is
+ * built from that file once Galaxy has fetched it, and is null until then.
+ */
+export interface WebApiBlockConfig {
+  /** The block's id, as scripts and queues name it: known before a published service's capability is. */
+  capabilityId: string;
+  capability: WebApiCapability | null;
+  service?: { origin: string; permissions: string[] };
+  mcp: { endpointIds: string[] };
+}
+
+export interface CollectionBlockConfig {
+  collection: CollectionDefinition;
+  mcp: { collect: boolean };
+  /** Where the collection's records go (a component-list in this document, or a table of its database), and the record sink's policy. */
+  output?: { store: CliItemStoreConfig | SqlItemStoreConfig; policy: RecordSinkConfig };
+}
+
+function readFieldBinding(name: string, value: unknown, errors: string[]): ItemFieldBinding | null {
+  if (!isRecord(value) || !text(value.path)) {
+    errors.push(`Output field "${name}" needs a path.`);
+    return null;
+  }
+  const source = value.source === 'collected' ? { source: 'collected' as const } : {};
+  if (value.kind === 'text') return { kind: 'text', path: text(value.path), ...source };
+  if (value.kind === 'form-field') {
+    if (!text(value.label)) {
+      errors.push(`Output field "${name}" needs the label of the form field it fills.`);
+      return null;
+    }
+    return { kind: 'form-field', path: text(value.path), label: text(value.label) };
+  }
+  if (value.kind !== 'cell' && value.kind !== 'annotated') {
+    errors.push(`Output field "${name}" must be a text, cell, annotated, or form-field binding.`);
+    return null;
+  }
+  const annotationKind: 'sort' | 'group' | null = isRecord(value.annotation) && (value.annotation.kind === 'sort' || value.annotation.kind === 'group') ? value.annotation.kind : null;
+  const annotation: { kind: 'sort' | 'group'; key: string } | undefined = annotationKind && isRecord(value.annotation) && text(value.annotation.key)
+    ? { kind: annotationKind, key: text(value.annotation.key) }
+    : undefined;
+  if (value.kind === 'annotated') {
+    // A value inside a line of text: the sort or group annotation it fills is required.
+    if (!annotation) {
+      errors.push(`Output field "${name}" needs the sort or group value it fills.`);
+      return null;
+    }
+    return { kind: 'annotated', path: text(value.path), annotation, ...(text(value.linkTo) ? { linkTo: text(value.linkTo) } : {}), ...source };
+  }
+  return {
+    kind: 'cell',
+    path: text(value.path),
+    row: Math.round(number(value.row, 0, 0, 1_000)),
+    column: Math.round(number(value.column, 0, 0, 1_000)),
+    ...(annotation ? { annotation } : {}),
+    ...(text(value.linkTo) ? { linkTo: text(value.linkTo) } : {}),
+  };
+}
+
+function readOutput(value: unknown, errors: string[]): CollectionBlockConfig['output'] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isRecord(value.store)) {
+    errors.push('The output needs a store.');
+    return undefined;
+  }
+  const store = value.store;
+  const policy = isRecord(value.policy) ? value.policy : {};
+  const ownedFields = Array.isArray(policy.ownedFields) ? strings(policy.ownedFields) : undefined;
+  const readPolicy = (): RecordSinkConfig => ({
+    onExisting: policy.onExisting === 'refresh' ? 'refresh' : 'keep',
+    keepGoodOnFailure: policy.keepGoodOnFailure !== false,
+    ...(ownedFields ? { ownedFields } : {}),
+  });
+  if (store.kind === 'sql') {
+    // A table of the document's database. Its columns are checked against the table when a run opens it.
+    const identifier = (name: unknown, role: string): string => {
+      const read = text(name);
+      if (!SQL_IDENTIFIER.test(read)) errors.push(`The output's ${role} must be a plain name (letters, digits, and _), not "${read}".`);
+      return read;
+    };
+    const columns = Object.fromEntries(Object.entries(isRecord(store.columns) ? store.columns : {})
+      .map(([name, column]) => [name, identifier(column, `column for "${name}"`)]));
+    if (ownedFields?.some((field) => !(field in columns))) errors.push('The output owns fields that have no column in the table.');
+    return {
+      store: {
+        kind: 'sql',
+        table: identifier(store.table, 'table'),
+        keyColumn: identifier(store.keyColumn, 'key column'),
+        recordColumn: identifier(store.recordColumn, 'record column'),
+        columns,
+        ...(store.collectedAtColumn !== undefined ? { collectedAtColumn: identifier(store.collectedAtColumn, 'column for when an item was found') } : {}),
+        ...(text(store.skipPagesWhere) ? { skipPagesWhere: text(store.skipPagesWhere) } : {}),
+      },
+      policy: readPolicy(),
+    };
+  }
+  const listPath = text(store.listPath);
+  const componentName = text(store.componentName);
+  const recordPath = text(store.recordPath);
+  if (!listPath.startsWith('/body/')) errors.push('The output list must be a path under /body.');
+  if (!componentName) errors.push('The output needs a reusable component name.');
+  if (!recordPath) errors.push('The output needs a record path.');
+  const fields = Object.fromEntries(Object.entries(isRecord(store.fields) ? store.fields : {})
+    .flatMap(([name, binding]) => {
+      const read = readFieldBinding(name, binding, errors);
+      return read ? [[name, read]] : [];
+    }));
+  if (ownedFields?.some((field) => !(field in fields))) errors.push('The output owns fields that have no place in the template.');
+  return {
+    store: { listPath, componentName, recordPath, fields },
+    policy: readPolicy(),
+  };
+}
+
+export interface QueueBlockConfig {
+  queueId: string;
+  target: { pluginId: string; method: string; args: Record<string, unknown> };
+  config: QueueConfig;
+  /** The queue as of the document's last save, or null when it has never held entries. */
+  state: QueueState | null;
+}
+
+/** The shortest a scheduled job may be set to run every, by its document or by the user. */
+export const SCHEDULE_MIN_MINUTES = 2;
+/** And the longest: a year. */
+export const SCHEDULE_MAX_MINUTES = 525_600;
+
+/**
+ * When a job runs: every so many minutes after its last turn, or at a time of day (local, "HH:MM") on some days of the
+ * week (0 is Sunday; none means every day), its next time after its last turn.
+ */
+export type ScheduleTiming = { every: number } | { at: string; days: number[] };
+
+/** The days of the week as a block names them (`"days": ["mon", "wed"]`), Sunday first, as Date numbers them. */
+export const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/** A job a document's schedule block declares: a script of its own, run on a timer once the user turns it on. */
+export interface ScheduleJob {
+  id: string;
+  name: string;
+  /** The block's script it runs, by name (`ScheduleBlockConfig.scripts`). */
+  script: string;
+  /** When it runs by default (`everyMinutes`, or `at` with `days`); the user may change it. */
+  timing: ScheduleTiming;
+}
+
+/**
+ * A timing as Galaxy keeps it (a collection's checks, the user's choices for a job): `{ every: minutes }` (at least the
+ * minimum), or `{ at: "HH:MM", days: [0–6] }`; null when it is neither.
+ */
+export function readTiming(value: unknown): ScheduleTiming | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.every === 'number' && Number.isFinite(value.every)) return { every: Math.min(SCHEDULE_MAX_MINUTES, Math.max(SCHEDULE_MIN_MINUTES, Math.round(value.every))) };
+  const at = timeOfDay(value.at);
+  if (!at) return null;
+  const days = Array.isArray(value.days) ? value.days.filter((day): day is number => Number.isInteger(day) && day >= 0 && day <= 6) : [];
+  return { at, days: [...new Set(days)].sort() };
+}
+
+/** A time of day as "HH:MM", 24-hour; null when it isn't one. */
+export function timeOfDay(value: unknown): string | null {
+  const match = typeof value === 'string' ? /^(\d{1,2}):(\d{2})$/.exec(value.trim()) : null;
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+  return `${match[1].padStart(2, '0')}:${match[2]}`;
+}
+
+/** A `galaxy.schedule` block (docs/job-search/12-scheduled-jobs.md). */
+export interface ScheduleBlockConfig {
+  jobs: ScheduleJob[];
+  /** The block's own scripts by name, as a form block keeps its own; its jobs name them. */
+  scripts: Record<string, string>;
+  /** The Python libraries its scripts may import, as a form's `scriptLibraries`. */
+  scriptLibraries: string[];
+  /** The pauses its scripts made, by job id (`*` for every job), with each one's reason. */
+  paused: Record<string, string>;
+}
+
+const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function number(value: unknown, fallback: number, min: number, max: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback;
+}
+
+/** HTTPS, or HTTP on a loopback host for local development. */
+function trustworthyUrl(value: unknown): URL | null {
+  try {
+    const url = new URL(text(value));
+    const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || url.hostname.startsWith('127.');
+    if (url.username || url.password) return null;
+    return url.protocol === 'https:' || (url.protocol === 'http:' && loopback) ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+const POINTER = /^(\/[^\/]*)+$/;
+
+function pointer(value: unknown): string | null {
+  const candidate = text(value);
+  return POINTER.test(candidate) ? candidate : null;
+}
+
+/** An endpoint whose response serves a document: JSON pointers to its URL, checks, keys, and revision. */
+function readServedDocument(value: unknown, label: string, inputs: string[], errors: string[]): ServedDocumentDefinition | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !pointer(value.urlPointer)) {
+    errors.push(`Endpoint "${label}" serves a document but has no URL pointer.`);
+    return undefined;
+  }
+  if (inputs.length !== 1) errors.push(`Endpoint "${label}" serves a document, so it must take exactly one input, the document ID.`);
+  const optional = (name: 'extensionPointer' | 'byteLengthPointer' | 'sha256Pointer' | 'keyringPointer') => {
+    if (value[name] === undefined) return {};
+    const parsed = pointer(value[name]);
+    if (!parsed) errors.push(`Endpoint "${label}" has an invalid ${name}.`);
+    return parsed ? { [name]: parsed } : {};
+  };
+  const revision = (Array.isArray(value.revision) ? value.revision : []).flatMap((entry) => {
+    const parsed = isRecord(entry) ? pointer(entry.pointer) : null;
+    if (!parsed) {
+      errors.push(`Endpoint "${label}" has an invalid revision pointer.`);
+      return [];
+    }
+    return [{ pointer: parsed, ...(text(entry.prefix) ? { prefix: text(entry.prefix) } : {}) }];
+  });
+  return {
+    urlPointer: pointer(value.urlPointer)!,
+    ...optional('extensionPointer'),
+    ...optional('byteLengthPointer'),
+    ...optional('sha256Pointer'),
+    ...optional('keyringPointer'),
+    ...(revision.length ? { revision } : {}),
+  };
+}
+
+function readEndpoint(value: unknown, errors: string[]): ApiEndpointDefinition | null {
+  if (!isRecord(value)) {
+    errors.push('An endpoint must be an object.');
+    return null;
+  }
+  const id = text(value.id);
+  const method = text(value.method).toUpperCase();
+  const path = text(value.path);
+  const label = id || '(unnamed)';
+  if (!id) errors.push('An endpoint needs an id.');
+  if (!METHODS.has(method)) errors.push(`Endpoint "${label}" has an unsupported method.`);
+  if (!path.startsWith('/') || path.startsWith('//')) errors.push(`Endpoint "${label}" must use a same-origin path.`);
+  const inputSchema = isRecord(value.inputSchema) ? value.inputSchema : { type: 'object', properties: {} };
+  const properties = isRecord(inputSchema.properties) ? Object.keys(inputSchema.properties) : [];
+  for (const parameter of path.matchAll(/\{([A-Za-z0-9_]+)\}/g)) {
+    if (!properties.includes(parameter[1])) errors.push(`Endpoint "${label}" uses {${parameter[1]}} but does not declare it as an input.`);
+  }
+  let idempotency: ApiEndpointDefinition['idempotency'];
+  if (isRecord(value.idempotency)) {
+    const header = text(value.idempotency.header);
+    const fromInputs = strings(value.idempotency.fromInputs);
+    if (!/^[A-Za-z0-9-]+$/.test(header)) errors.push(`Endpoint "${label}" has an invalid idempotency header.`);
+    if (fromInputs.some((name) => !properties.includes(name))) errors.push(`Endpoint "${label}" derives its idempotency key from undeclared inputs.`);
+    idempotency = fromInputs.length ? { header, fromInputs } : { header };
+  }
+  const servesDocument = readServedDocument(value.servesDocument, label, properties, errors);
+  const origin = text(value.origin) ? trustworthyUrl(value.origin) : null;
+  if (text(value.origin) && !origin) errors.push(`Endpoint "${label}" origin must use HTTPS (or HTTP on a loopback host).`);
+  for (const [name, schema] of Object.entries(isRecord(inputSchema.properties) ? inputSchema.properties : {})) {
+    if (!isRecord(schema)) continue;
+    for (const link of ['x-hvy-document-id', 'x-hvy-document-revision']) {
+      if (schema[link] !== undefined && !properties.includes(text(schema[link]))) errors.push(`Endpoint "${label}" input "${name}" links ${link} to an undeclared input.`);
+    }
+  }
+  if (!id || !METHODS.has(method)) return null;
+  return {
+    id,
+    name: text(value.name) || id,
+    description: text(value.description),
+    method: method as ApiEndpointDefinition['method'],
+    path,
+    inputSchema,
+    ...(idempotency ? { idempotency } : {}),
+    ...(servesDocument ? { servesDocument } : {}),
+    ...(origin ? { origin: origin.origin } : {}),
+    ...(text(value.errorMessagePointer) ? { errorMessagePointer: text(value.errorMessagePointer) } : {}),
+    ...(value.timeoutMs !== undefined ? { timeoutMs: number(value.timeoutMs, 15_000, 1_000, MAX_ENDPOINT_TIMEOUT_MS) } : {}),
+  };
+}
+
+const RESPONSE_ACTIONS = new Set<ResponseAction>(['retry', 'pause', 'fail']);
+
+/** A service's response rules (ResponseRule): each a status or several, body values by JSON pointer, an action, and where its message is. */
+function readResponseRules(value: unknown, errors: string[]): ResponseRule[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    errors.push('The response rules must be a list.');
+    return [];
+  }
+  return value.flatMap((rule, index): ResponseRule[] => {
+    const label = `Response rule ${index + 1}`;
+    if (!isRecord(rule)) {
+      errors.push(`${label} is not an object.`);
+      return [];
+    }
+    const status = (Array.isArray(rule.status) ? rule.status : [rule.status]).filter((code): code is number => Number.isInteger(code) && Number(code) >= 100 && Number(code) < 600);
+    if (!status.length) errors.push(`${label} needs a status, or a list of them, from 100 to 599.`);
+    const action = text(rule.action) as ResponseAction;
+    if (!RESPONSE_ACTIONS.has(action)) errors.push(`${label}'s action must be retry, pause, or fail.`);
+    const body: NonNullable<ResponseRule['body']> = {};
+    if (rule.body !== undefined && !isRecord(rule.body)) errors.push(`${label}'s body must map JSON pointers to values.`);
+    for (const [pointer, expected] of Object.entries(isRecord(rule.body) ? rule.body : {})) {
+      if (!pointer.startsWith('/')) errors.push(`${label}'s body condition "${pointer}" must be a JSON pointer, starting with "/".`);
+      else if (expected !== null && !['string', 'number', 'boolean'].includes(typeof expected)) errors.push(`${label}'s body condition "${pointer}" must be a string, number, boolean, or null.`);
+      else body[pointer] = expected as string | number | boolean | null;
+    }
+    const message = text(rule.message);
+    if (message && !message.startsWith('/')) errors.push(`${label}'s message must be a JSON pointer, starting with "/".`);
+    if (!status.length || !RESPONSE_ACTIONS.has(action)) return [];
+    return [{ status, ...(Object.keys(body).length ? { body } : {}), action, ...(message.startsWith('/') ? { message } : {}) }];
+  });
+}
+
+function readSession(value: unknown, origin: string, endpoints: ApiEndpointDefinition[], errors: string[]): SessionDefinition | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value) || !isRecord(value.probe)) {
+    errors.push('The sign-in definition needs a probe.');
+    return undefined;
+  }
+  const loginUrl = trustworthyUrl(value.loginUrl);
+  const completeUrl = trustworthyUrl(value.completeUrl);
+  if (!loginUrl || loginUrl.origin !== origin) errors.push('The login URL must be on the page origin.');
+  if (!completeUrl || completeUrl.origin !== origin) errors.push('The completion URL must be on the page origin.');
+  const probeId = text(value.probe.endpointId);
+  const probe = endpoints.find((endpoint) => endpoint.id === probeId);
+  if (!probe || probe.method !== 'GET') errors.push('The session probe must be a GET endpoint of this block.');
+  const logoutEndpointId = text(value.logoutEndpointId);
+  if (logoutEndpointId && !endpoints.some((endpoint) => endpoint.id === logoutEndpointId)) errors.push('The logout endpoint is not defined.');
+  const loginAllowedOrigins = strings(value.loginAllowedOrigins).flatMap((candidate) => {
+    const url = trustworthyUrl(candidate);
+    if (!url) errors.push(`"${candidate}" is not an allowed login origin.`);
+    return url ? [url.origin] : [];
+  });
+  const signedOutStatuses = Array.isArray(value.probe.signedOutStatuses)
+    ? value.probe.signedOutStatuses.filter((status): status is number => Number.isInteger(status) && status >= 400 && status < 600)
+    : undefined;
+  return {
+    loginUrl: loginUrl?.href ?? '',
+    completeUrl: completeUrl?.href ?? '',
+    probe: {
+      endpointId: probeId,
+      ...(signedOutStatuses?.length ? { signedOutStatuses } : {}),
+    },
+    ...(logoutEndpointId ? { logoutEndpointId } : {}),
+    ...(loginAllowedOrigins.length ? { loginAllowedOrigins } : {}),
+  };
+}
+
+/**
+ * A block that uses a service's published file (serviceManifests.ts): it names the service and the permissions it asks
+ * for. Once Galaxy has fetched the file, the block's capability is what the file publishes for those permissions (and
+ * the sign-in), checked as an inline block's is, on the service's own site; until then the block has no capability.
+ */
+function readPublishedWebApiBlockConfig(value: Record<string, unknown>): ConfigResult<WebApiBlockConfig> {
+  if (!publishedServices.enabled) return { ok: false, errors: [PUBLISHED_SERVICES_OFF] };
+  const errors: string[] = [];
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const serviceUrl = trustworthyUrl(value.service);
+  if (!serviceUrl) errors.push('The service must be an HTTPS address (or HTTP on a loopback host).');
+  const permissions = [...new Set(strings(value.permissions))];
+  if (!permissions.length) errors.push('The block asks for none of the service’s permissions.');
+  const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
+  if (errors.length || !serviceUrl) return { ok: false, errors };
+  const service = { origin: serviceUrl.origin, permissions };
+  const published = publishedService(service.origin);
+  if (!published || published.status === 'loading') return { ok: true, value: { capabilityId, capability: null, service, mcp: { endpointIds: exposed } } };
+  const where = `${serviceUrl.host}’s published file`;
+  if (published.status === 'failed') return { ok: false, errors: [`Couldn’t read ${where}: ${published.error}`] };
+  const manifest = published.manifest;
+  if (manifest.hvy !== SERVICE_MANIFEST_FORMAT) return { ok: false, errors: [`${where} is not a ${SERVICE_MANIFEST_FORMAT} file.`] };
+  const offered = (Array.isArray(manifest.permissions) ? manifest.permissions : []).filter(isRecord);
+  const granted = permissions.flatMap((id) => offered.filter((permission) => text(permission.id) === id).slice(0, 1));
+  const missing = permissions.filter((id) => !granted.some((permission) => text(permission.id) === id));
+  if (missing.length) return { ok: false, errors: [`${where} offers no permission ${missing.map((id) => `"${id}"`).join(', ')}.`] };
+  const session = isRecord(manifest.session) ? manifest.session : null;
+  const published_endpoints = (Array.isArray(manifest.endpoints) ? manifest.endpoints : []).filter(isRecord);
+  const wanted = new Set([
+    ...granted.flatMap((permission) => strings(permission.endpoints)),
+    ...(session ? [text(session.probe), text(session.logout)].filter(Boolean) : []),
+  ]);
+  const undefinedEndpoints = [...wanted].filter((id) => !published_endpoints.some((endpoint) => text(endpoint.id) === id));
+  if (undefinedEndpoints.length) return { ok: false, errors: [`${where} grants endpoints it does not define: ${undefinedEndpoints.join(', ')}.`] };
+  const at = (path: unknown) => `${service.origin}${text(path) || '/'}`;
+  // The published file as an inline block: the same checks, and every path on the service's own site.
+  const inline = readWebApiBlockConfig({
+    schemaVersion: WEB_AUTOMATION_SCHEMA_VERSION,
+    capabilityId,
+    name: text(manifest.name) || serviceUrl.host,
+    pageUrl: at(manifest.page),
+    ...(session ? {
+      session: {
+        loginUrl: at(session.loginPath),
+        completeUrl: at(session.completePath),
+        probe: { endpointId: text(session.probe), ...(Array.isArray(session.signedOutStatuses) ? { signedOutStatuses: session.signedOutStatuses } : {}) },
+        ...(text(session.logout) ? { logoutEndpointId: text(session.logout) } : {}),
+      },
+    } : {}),
+    endpoints: published_endpoints.filter((endpoint) => wanted.has(text(endpoint.id))),
+    readOrigins: manifest.readOrigins,
+    ...(manifest.responses !== undefined ? { responses: manifest.responses } : {}),
+    mcp: { endpointIds: exposed },
+  });
+  if (!inline.ok) return { ok: false, errors: inline.errors.map((error) => `${where}: ${error}`) };
+  const capability = inline.value.capability!;
+  const changesData = (permission: Record<string, unknown>) => strings(permission.endpoints)
+    .some((id) => capability.endpoints.find((endpoint) => endpoint.id === id)?.method !== 'GET');
+  return {
+    ok: true,
+    value: {
+      capabilityId,
+      capability: {
+        ...capability,
+        published: { permissions: granted.map((permission) => ({ id: text(permission.id), description: text(permission.description) || text(permission.id), changesData: changesData(permission) })) },
+      },
+      service,
+      mcp: inline.value.mcp,
+    },
+  };
+}
+
+export function readWebApiBlockConfig(value: unknown): ConfigResult<WebApiBlockConfig> {
+  const errors: string[] = [];
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported web API block configuration.'] };
+  if (value.service !== undefined) return readPublishedWebApiBlockConfig(value);
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const pageUrl = trustworthyUrl(value.pageUrl);
+  if (!pageUrl) return { ok: false, errors: [...errors, 'The page URL must use HTTPS.'] };
+  const apiPageUrl = value.apiPageUrl === undefined ? null : trustworthyUrl(value.apiPageUrl);
+  if (value.apiPageUrl !== undefined && apiPageUrl?.origin !== pageUrl.origin) errors.push('The API page must be on the page origin.');
+  const endpoints = (Array.isArray(value.endpoints) ? value.endpoints : []).flatMap((endpoint) => readEndpoint(endpoint, errors) ?? []);
+  const ids = endpoints.map((endpoint) => endpoint.id);
+  if (new Set(ids).size !== ids.length) errors.push('Endpoint ids must be unique.');
+  const session = readSession(value.session, pageUrl.origin, endpoints, errors);
+  for (const endpoint of endpoints) {
+    for (const name of documentTextInputs(endpoint)) {
+      const { endpointId, idInput } = documentInputLinks(endpoint, name);
+      if (!endpoints.find((candidate) => candidate.id === endpointId)?.servesDocument) {
+        errors.push(`Endpoint "${endpoint.id}" input "${name}" must name an endpoint of this block that serves a document.`);
+      }
+      if (!idInput) errors.push(`Endpoint "${endpoint.id}" input "${name}" must name the input holding the document ID.`);
+    }
+  }
+  const readOrigins = strings(value.readOrigins).flatMap((origin) => {
+    const parsed = trustworthyUrl(origin);
+    if (!parsed) errors.push(`Read origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
+    return parsed ? [parsed.origin] : [];
+  });
+  const callOrigins = strings(value.callOrigins).flatMap((origin) => {
+    const parsed = trustworthyUrl(origin);
+    if (!parsed) errors.push(`Call origin "${origin}" must use HTTPS (or HTTP on a loopback host).`);
+    return parsed ? [parsed.origin] : [];
+  });
+  for (const endpoint of endpoints) {
+    if (endpoint.origin && !callOrigins.includes(endpoint.origin)) errors.push(`Endpoint "${endpoint.id}" is on ${endpoint.origin}, which isn't one of the block's call origins.`);
+  }
+  const exposed = strings(isRecord(value.mcp) ? value.mcp.endpointIds : []);
+  if (exposed.some((id) => !ids.includes(id))) errors.push('MCP exposes an endpoint that is not defined.');
+  const responses = readResponseRules(value.responses, errors);
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      capabilityId,
+      capability: {
+        capabilityId,
+        name: text(value.name) || pageUrl.hostname,
+        pageUrl: pageUrl.href,
+        ...(apiPageUrl ? { apiPageUrl: apiPageUrl.href } : {}),
+        ...(session ? { session } : {}),
+        endpoints,
+        ...(readOrigins.length ? { readOrigins: [...new Set(readOrigins)] } : {}),
+        ...(callOrigins.length ? { callOrigins: [...new Set(callOrigins)] } : {}),
+        ...(responses.length ? { responses } : {}),
+      },
+      mcp: { endpointIds: exposed },
+    },
+  };
+}
+
+function readPattern(value: unknown, errors: string[]): SitePatternDefinition | null {
+  if (!isRecord(value)) {
+    errors.push('A pattern must be an object.');
+    return null;
+  }
+  const id = text(value.id);
+  const label = id || '(unnamed)';
+  const role = value.role === 'listing' || value.role === 'detail' ? value.role : null;
+  if (!id) errors.push('A pattern needs an id.');
+  if (!role) errors.push(`Pattern "${label}" needs a role.`);
+  const appliesTo = Array.isArray(value.appliesTo) ? value.appliesTo as SitePatternDefinition['appliesTo'] : [];
+  if (!appliesTo.length) errors.push(`Pattern "${label}" needs at least one scope rule.`);
+  for (const rule of appliesTo) {
+    const problem = isRecord(rule) ? validateScopeRule(rule) : 'A scope rule must be an object.';
+    if (problem) errors.push(`Pattern "${label}": ${problem}`);
+  }
+  const fields = (Array.isArray(value.fields) ? value.fields : []).flatMap((field) => {
+    if (!isRecord(field) || !text(field.id)) return [];
+    return [{ id: text(field.id), kind: field.kind === 'link' ? 'link' as const : 'text' as const }];
+  });
+  const linkFieldId = text(value.linkFieldId);
+  if (role === 'listing' && !fields.some((field) => field.id === linkFieldId && field.kind === 'link')) {
+    errors.push(`Listing pattern "${label}" needs a link field.`);
+  }
+  if (!id || !role) return null;
+  return {
+    id,
+    name: text(value.name) || id,
+    role,
+    appliesTo,
+    fields,
+    minimumConfidence: number(value.minimumConfidence, 0.8, 0.5, 1),
+    ...(linkFieldId ? { linkFieldId } : {}),
+    ...(text(value.paginationCommandId) ? { paginationCommandId: text(value.paginationCommandId) } : {}),
+    ...(text(value.prepareCommandId) ? { prepareCommandId: text(value.prepareCommandId) } : {}),
+    ...(Array.isArray(value.anchors) && value.anchors.length ? { anchors: value.anchors } : {}),
+    ...(text(value.itemCommandId) ? { itemCommandId: text(value.itemCommandId) } : {}),
+    ...(value.matcher !== undefined ? { matcher: value.matcher } : {}),
+    ...(text(value.siteId) ? { siteId: text(value.siteId) } : {}),
+    ...(value.source !== undefined ? { source: value.source } : {}),
+    version: number(value.version, 1, 1, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+const FIELD_ID = /^[a-z][a-z0-9_-]*$/;
+
+/** The configured fields. Ids are what patterns, start pages, keys, and the output refer to, so they must be unique. */
+function readCollectionFields(value: unknown, errors: string[]): CollectionField[] {
+  const fields = (Array.isArray(value) ? value : []).flatMap((field): CollectionField[] => {
+    const id = isRecord(field) ? text(field.id) : '';
+    if (!isRecord(field) || !FIELD_ID.test(id) || id === RECORD_URL_FIELD) {
+      errors.push(`"${id || '(unnamed)'}" is not a field id: use lowercase letters, digits, "-" or "_", and not "${RECORD_URL_FIELD}".`);
+      return [];
+    }
+    if (field.kind !== undefined && field.kind !== 'text' && field.kind !== 'long-text') errors.push(`Field "${id}" has an unknown kind.`);
+    return [{
+      id,
+      label: text(field.label) || id,
+      kind: field.kind === 'long-text' ? 'long-text' : 'text',
+      ...(field.required === true ? { required: true } : {}),
+      ...(typeof field.minLength === 'number' ? { minLength: number(field.minLength, 0, 0, 100_000) } : {}),
+    }];
+  });
+  const ids = fields.map((field) => field.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Field id "${id}" is used twice.`);
+  return fields;
+}
+
+/** Start pages: unique ids, trustworthy addresses, and fixed values only for configured fields. */
+function readStartPages(value: unknown, fieldIds: Set<string>, errors: string[]): StartPage[] {
+  const pages = (Array.isArray(value) ? value : []).flatMap((page): StartPage[] => {
+    if (!isRecord(page)) return [];
+    const id = text(page.id);
+    const url = trustworthyUrl(page.url);
+    if (!id) errors.push('A start page needs an id.');
+    if (!url) errors.push(`"${text(page.url)}" is not an HTTPS start page.`);
+    const values = Object.fromEntries(Object.entries(isRecord(page.values) ? page.values : {})
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[1].trim()))
+      .map(([field, fixed]) => [field, fixed.trim()]));
+    for (const field of Object.keys(values).filter((field) => !fieldIds.has(field))) {
+      errors.push(`Start page "${text(page.url)}" fills "${field}", which is not one of the fields.`);
+    }
+    // Its own limits, where it has them; the collection's are its defaults.
+    const limits = Object.fromEntries((['maxPages', 'maxItems'] as const).flatMap((limit) => (typeof page[limit] === 'number' ? [[limit, number(page[limit], 1, 1, LIMIT_BOUNDS[limit])]] : [])));
+    // Its own timing for checks, when it has one; the collection's is its default.
+    const checkTiming = readTiming(page.checkTiming);
+    const name = text(page.name).trim();
+    // When a run last read it: kept only as a time.
+    const checkedAt = typeof page.checkedAt === 'string' && !Number.isNaN(Date.parse(page.checkedAt)) ? page.checkedAt : null;
+    return id && url ? [{ id, url: url.href, ...(name ? { name } : {}), ...(Object.keys(values).length ? { values } : {}), ...(page.disabled === true ? { disabled: true as const } : {}), ...limits, ...(typeof page.stopAtKnownPage === 'boolean' ? { stopAtKnownPage: page.stopAtKnownPage } : {}), ...(checkTiming ? { checkTiming } : {}), ...(checkedAt ? { checkedAt } : {}) }] : [];
+  });
+  const ids = pages.map((page) => page.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Start page id "${id}" is used twice.`);
+  return pages;
+}
+
+/** Site setups: unique ids, each named; a publisher's version is a whole number. */
+function readSites(value: unknown, errors: string[]): CollectionSite[] {
+  const sites = (Array.isArray(value) ? value : []).flatMap((site): CollectionSite[] => {
+    const id = isRecord(site) ? text(site.id) : '';
+    if (!isRecord(site) || !id) {
+      errors.push('A site setup needs an id.');
+      return [];
+    }
+    const from = isRecord(site.from) && text(site.from.name) ? { name: text(site.from.name), version: number(site.from.version, 1, 1, Number.MAX_SAFE_INTEGER) } : null;
+    return [{ id, name: text(site.name) || id, ...(from ? { from } : {}), ...readSiteSettings(site) }];
+  });
+  const ids = sites.map((site) => site.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Site setup id "${id}" is used twice.`);
+  return sites;
+}
+
+/** A pattern fills only configured fields, and its Next and item commands are its own. */
+function checkPatternReferences(pattern: SitePatternDefinition, fieldIds: Set<string>, errors: string[]): void {
+  for (const field of pattern.fields.filter((candidate) => candidate.kind === 'text' && !fieldIds.has(candidate.id))) {
+    errors.push(`Pattern "${pattern.name}" fills "${field.id}", which is not one of the fields.`);
+  }
+  const commands = isRecord(pattern.matcher) && isRecord(pattern.matcher.commands) ? pattern.matcher.commands : null;
+  for (const commandId of [pattern.paginationCommandId, pattern.prepareCommandId, pattern.itemCommandId]) {
+    if (commandId && commands && !(commandId in commands)) errors.push(`Pattern "${pattern.name}" runs command "${commandId}", which it does not have.`);
+  }
+}
+
+export function readCollectionBlockConfig(value: unknown): ConfigResult<CollectionBlockConfig> {
+  const errors: string[] = [];
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported collection block configuration.'] };
+  const capabilityId = text(value.capabilityId);
+  if (!capabilityId) errors.push('The block needs a capability id.');
+  const fields = readCollectionFields(value.fields, errors);
+  const fieldIds = new Set(fields.map((field) => field.id));
+  const startPages = readStartPages(value.startPages, fieldIds, errors);
+  const sites = readSites(value.sites, errors);
+  const patterns = (Array.isArray(value.patterns) ? value.patterns : []).flatMap((pattern) => readPattern(pattern, errors) ?? []);
+  const ids = patterns.map((pattern) => pattern.id);
+  if (new Set(ids).size !== ids.length) errors.push('Pattern ids must be unique.');
+  for (const pattern of patterns) checkPatternReferences(pattern, fieldIds, errors);
+  for (const site of sites) {
+    for (const field of (site.rowKey ?? []).filter((id) => !fieldIds.has(id))) errors.push(`Site setup "${site.name}" tells its rows apart by "${field}", which is not one of the fields.`);
+  }
+  const siteIds = new Set(sites.map((site) => site.id));
+  for (const pattern of patterns.filter((candidate) => candidate.siteId && !siteIds.has(candidate.siteId))) {
+    errors.push(`Pattern "${pattern.name}" belongs to site setup "${pattern.siteId}", which is not one of the site setups.`);
+  }
+  let key: CollectionDefinition['key'];
+  if (isRecord(value.key)) {
+    if (value.key.kind === 'url') key = { kind: 'url' };
+    else if (value.key.kind === 'field' && text(value.key.field)) key = { kind: 'field', field: text(value.key.field) };
+    else if (value.key.kind === 'fields' && strings(value.key.fields).length) key = { kind: 'fields', fields: strings(value.key.fields) };
+    else errors.push('The record key must be the URL, a field, or a list of fields.');
+  }
+  const keyFields = key?.kind === 'field' ? [key.field] : key?.kind === 'fields' ? key.fields : [];
+  for (const field of keyFields.filter((id) => !fieldIds.has(id))) errors.push(`The record key uses "${field}", which is not one of the fields.`);
+  const ignoredQueryParameters = Array.isArray(value.ignoredQueryParameters) ? strings(value.ignoredQueryParameters) : undefined;
+  const output = readOutput(value.output, errors);
+  // The template has start pages other glue fills (results, notes); records may write only the fields they own.
+  for (const name of (output?.policy.ownedFields ?? []).filter((name) => name !== RECORD_URL_FIELD && !fieldIds.has(name))) {
+    errors.push(`Records may write "${name}", which is not one of the fields.`);
+  }
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      collection: {
+        capabilityId,
+        name: text(value.name) || 'Collection',
+        ...(text(value.itemName) ? { itemName: text(value.itemName) } : {}),
+        fields,
+        startPages,
+        sites,
+        patterns,
+        maxPages: number(value.maxPages, 5, 1, LIMIT_BOUNDS.maxPages),
+        maxItems: number(value.maxItems, 50, 1, LIMIT_BOUNDS.maxItems),
+        ...(value.stopAtKnownPage === true ? { stopAtKnownPage: true } : {}),
+        checkTiming: readTiming(value.checkTiming) ?? DEFAULT_CHECK_TIMING,
+        duePagesPerRun: number(value.duePagesPerRun, 10, 1, LIMIT_BOUNDS.duePagesPerRun),
+        ...(value.readItemPages === false ? { readItemPages: false as const } : {}),
+        followLinksToOtherSites: value.followLinksToOtherSites === true,
+        ...(key ? { key } : {}),
+        ...(ignoredQueryParameters ? { ignoredQueryParameters } : {}),
+      },
+      mcp: { collect: isRecord(value.mcp) && value.mcp.collect === true },
+      ...(output ? { output } : {}),
+    },
+  };
+}
+
+/** A web profile context: the browser profile, by name, for the web plugins in its section or container. */
+export interface ProfileContextBlockConfig {
+  /** Not named yet until the user chooses one. */
+  profile?: string;
+}
+
+export function readProfileContextBlockConfig(value: unknown): ConfigResult<ProfileContextBlockConfig> {
+  // A context just inserted has an empty configuration: it names no profile yet, and its reader asks for one.
+  if (!isRecord(value) || (value.schemaVersion !== undefined && value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION)) {
+    return { ok: false, errors: ['Unsupported web profile context configuration.'] };
+  }
+  return { ok: true, value: text(value.profile) ? { profile: text(value.profile) } : {} };
+}
+
+export function readQueueBlockConfig(value: unknown): ConfigResult<QueueBlockConfig> {
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported queue block configuration.'] };
+  const errors: string[] = [];
+  const queueId = text(value.queueId);
+  const target = isRecord(value.target) ? value.target : {};
+  const pluginId = text(target.pluginId);
+  const method = text(target.method);
+  if (!queueId) errors.push('The queue needs an id.');
+  if (!pluginId || !method) errors.push('The queue needs a target plugin and method.');
+  if (pluginId === QUEUE_PLUGIN_ID) errors.push('A queue cannot target another queue.');
+  const config = isRecord(value.config) ? value.config : {};
+  const retry = isRecord(config.retry) ? config.retry : {};
+  const defaults = DEFAULT_QUEUE_CONFIG;
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      queueId,
+      target: { pluginId, method, args: isRecord(target.args) ? target.args : {} },
+      config: {
+        concurrency: Math.round(number(config.concurrency, defaults.concurrency, 1, 4)),
+        minIntervalMs: number(config.minIntervalMs, defaults.minIntervalMs, 0, 3_600_000),
+        jitterMs: number(config.jitterMs, defaults.jitterMs, 0, 600_000),
+        retry: {
+          statuses: Array.isArray(retry.statuses) ? retry.statuses.filter((status): status is number => Number.isInteger(status)) : defaults.retry.statuses,
+          codes: Array.isArray(retry.codes) ? strings(retry.codes) : defaults.retry.codes,
+          maxAttempts: Math.round(number(retry.maxAttempts, defaults.retry.maxAttempts, 1, 10)),
+          baseDelayMs: number(retry.baseDelayMs, defaults.retry.baseDelayMs, 1_000, 3_600_000),
+          maxDelayMs: number(retry.maxDelayMs, defaults.retry.maxDelayMs, 1_000, 86_400_000),
+        },
+      },
+      state: readQueueState(value.state),
+    },
+  };
+}
+
+export function readScheduleBlockConfig(value: unknown): ConfigResult<ScheduleBlockConfig> {
+  if (!isRecord(value) || value.schemaVersion !== WEB_AUTOMATION_SCHEMA_VERSION) return { ok: false, errors: [typeof value === 'string' ? value : 'Unsupported schedule block configuration.'] };
+  const errors: string[] = [];
+  const scripts = Object.fromEntries(Object.entries(isRecord(value.scripts) ? value.scripts : {})
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && Boolean(entry[0].trim()))
+    .map(([name, source]) => [name.trim(), source]));
+  const jobs = (Array.isArray(value.jobs) ? value.jobs : []).flatMap((job): ScheduleJob[] => {
+    const id = isRecord(job) ? text(job.id) : '';
+    if (!isRecord(job) || !id) {
+      errors.push('A scheduled job needs an id.');
+      return [];
+    }
+    const script = text(job.script);
+    if (!(script in scripts)) errors.push(`Job "${id}" runs "${script}", which is not one of the block's scripts.`);
+    // Every so many minutes, or at a time of day on some days.
+    if (job.at !== undefined) {
+      const at = timeOfDay(job.at);
+      const names = Array.isArray(job.days) ? job.days.map((day) => text(day).toLowerCase()) : [];
+      const unknown = names.filter((day) => !(WEEKDAYS as readonly string[]).includes(day));
+      if (!at) errors.push(`Job "${id}" runs at "${text(job.at)}", which is not a time of day ("HH:MM").`);
+      if (unknown.length) errors.push(`Job "${id}" runs on "${unknown.join('", "')}", which ${unknown.length === 1 ? 'is not a day' : 'are not days'} ("mon" to "sun").`);
+      return [{ id, name: text(job.name) || id, script, timing: { at: at ?? '00:00', days: [...new Set(names.map((day) => (WEEKDAYS as readonly string[]).indexOf(day)))].filter((day) => day >= 0).sort() } }];
+    }
+    const every = job.everyMinutes;
+    if (typeof every !== 'number' || !Number.isInteger(every) || every < SCHEDULE_MIN_MINUTES || every > SCHEDULE_MAX_MINUTES) {
+      errors.push(`Job "${id}" must run every ${SCHEDULE_MIN_MINUTES} minutes or more (a whole number of minutes), or at a time of day ("at": "HH:MM").`);
+    }
+    return [{ id, name: text(job.name) || id, script, timing: { every: Number(every) } }];
+  });
+  const ids = jobs.map((job) => job.id);
+  for (const id of ids.filter((candidate, index) => ids.indexOf(candidate) !== index)) errors.push(`Job id "${id}" is used twice.`);
+  if (errors.length) return { ok: false, errors };
+  const state = isRecord(value.state) ? value.state : {};
+  const paused = Object.fromEntries(Object.entries(isRecord(state.paused) ? state.paused : {})
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && (entry[0] === '*' || ids.includes(entry[0]))));
+  return {
+    ok: true,
+    value: {
+      jobs,
+      scripts,
+      scriptLibraries: Array.isArray(value.scriptLibraries) ? strings(value.scriptLibraries) : [],
+      paused,
+    },
+  };
+}
+
+const QUEUE_ENTRY_STATUSES = new Set<QueueEntryStatus>(['queued', 'running', 'waiting-retry', 'done', 'failed', 'cancelled']);
+
+/** Reads the queue state saved in a block, dropping malformed entries rather than failing. */
+function readQueueState(value: unknown): QueueState | null {
+  if (!isRecord(value) || !Array.isArray(value.entries)) return null;
+  const entries = value.entries.flatMap((raw): QueueEntry[] => {
+    if (!isRecord(raw) || !text(raw.key) || !text(raw.idempotencyKey) || !QUEUE_ENTRY_STATUSES.has(raw.status as QueueEntryStatus)) return [];
+    return [{
+      key: text(raw.key),
+      input: raw.input ?? null,
+      ...(raw.context === undefined ? {} : { context: raw.context }),
+      idempotencyKey: text(raw.idempotencyKey),
+      status: raw.status as QueueEntryStatus,
+      attempts: Number.isInteger(raw.attempts) ? Number(raw.attempts) : 0,
+      lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+      lastStatus: typeof raw.lastStatus === 'number' ? raw.lastStatus : null,
+      result: raw.result ?? null,
+      nextAttemptAt: typeof raw.nextAttemptAt === 'number' ? raw.nextAttemptAt : null,
+      delivered: raw.delivered === true,
+      updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : 0,
+    }];
+  });
+  return {
+    entries,
+    paused: value.paused === true,
+    pauseReason: typeof value.pauseReason === 'string' ? value.pauseReason : null,
+    pauseMessage: typeof value.pauseMessage === 'string' ? value.pauseMessage : null,
+    awaitingResume: false,
+  };
+}
+
+/**
+ * An inline web API block switched to a service's published file: the snapshot goes, and the block names the service
+ * and the permissions it asks for. It keeps its id, and what AI tools may call within what those permissions grant.
+ * Keys that go are set to undefined, since a block's stored configuration is merged with the change.
+ */
+export function switchToPublishedService(config: Record<string, unknown>, origin: string, manifest: Record<string, unknown>, permissions: string[]): Record<string, unknown> {
+  const offered = (Array.isArray(manifest.permissions) ? manifest.permissions : []).filter(isRecord);
+  const allowed = new Set(offered.filter((permission) => permissions.includes(text(permission.id))).flatMap((permission) => strings(permission.endpoints)));
+  const exposed = strings(isRecord(config.mcp) ? config.mcp.endpointIds : []);
+  return {
+    ...config,
+    name: undefined,
+    pageUrl: undefined,
+    apiPageUrl: undefined,
+    session: undefined,
+    endpoints: undefined,
+    readOrigins: undefined,
+    callOrigins: undefined,
+    responses: undefined,
+    service: origin,
+    permissions,
+    mcp: { ...(isRecord(config.mcp) ? config.mcp : {}), endpointIds: exposed.filter((id) => allowed.has(id)) },
+  };
+}

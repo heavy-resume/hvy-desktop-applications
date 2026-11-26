@@ -1,11 +1,17 @@
+import { DEFAULT_SCHEDULED_JOBS_AT_ONCE, normalizeScheduledDocuments, normalizeScheduledJobsAtOnce } from '../webAutomation/scheduleSettings';
 import { builtInPlugins } from 'virtual:hvy-built-in-plugins';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../../heavy-file-format/src/search/types';
 import { aiEmbeddingDefaultModel, aiEmbeddingProviderPreset, aiEmbeddingProviderPresets, aiEmbeddingProvidersForMode, aiProviderDefaultModel, aiProviderPreset, aiProviderPresets, type AiEmbeddingProviderMode } from '../aiProviders';
-import { generateMcpBearerToken, normalizeHomepageSetting, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings } from '../backend';
+import { generateMcpBearerToken, normalizeHomepageSetting, type AiActionConfig, type AiActionKey, type AiActionSettings, type AiProviderConfig, type AiSettings, type AppSettings, type StoredAppSettings, type ImageAttachmentMaxDimensions, type McpClientInstallTarget, type McpSettings } from '../backend';
 import type { HvyMode } from '../hvy';
 import { type AppState } from '../state';
 import { normalizeWebCapabilityAuthorizations, normalizeWebCapabilityProfileBindings } from '../webCapabilities';
 import { normalizeIntegrationWebMcpApprovals } from '../integrationWebMcp';
+import { builtInPluginPolicy } from '../pluginManager';
+import { revokeAuthorization } from '../webAutomation/authorization';
+import { appSettingsFromStorage, homepageFromStorage } from '../appSettingsFiles';
+import { fileKeyForPath } from '../runtimeDocuments';
+import { DEFAULT_COLLECTION_WORKER_LIMITS, normalizeCapabilityAuthorizations, normalizeCollectionWorkerLimits } from '../webAutomation/settings';
 import { copyIcon, eyeIcon } from './render-shell';
 import { escapeAttr, escapeHtml } from './shared';
 
@@ -475,6 +481,8 @@ export function renderEmbeddingSettingsField(settings: AiSettings): string {
 
 export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettings {
   const parsedSettings = parseAppSettings(String(data.get('settingsJson') ?? ''));
+  // Settings kept per file are held by the file's reference.
+  const currentFile = currentPath ? fileKeyForPath(currentPath) : null;
   const visiblePluginPolicies = Object.fromEntries(
     [...data.entries()]
       .filter(([key, value]) => key.startsWith('pluginPolicy:') && ['disabled', 'enabled', 'conditional'].includes(String(value)))
@@ -482,35 +490,39 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
   );
   const pluginPolicies = { ...parsedSettings.pluginPolicies };
   for (const [key, policy] of Object.entries(visiblePluginPolicies)) {
-    if (builtInPlugins.some((plugin) => plugin.id === key)
-      && policy === 'enabled'
-      && !(key in parsedSettings.pluginPolicies)) {
+    // A built-in left at its own default is not stored, so the default can follow the plugin.
+    const builtIn = builtInPlugins.find((plugin) => plugin.id === key);
+    if (builtIn && !(key in parsedSettings.pluginPolicies) && policy === builtInPluginPolicy({ pluginPolicies: {} }, builtIn)) {
       continue;
     }
     pluginPolicies[key] = policy;
   }
-  const visiblePluginKeys = new Set(Object.keys(visiblePluginPolicies));
-  const acceptedForCurrentFile = [...data.keys()]
-    .filter((key) => key.startsWith('pluginAccepted:'))
-    .map((key) => key.slice('pluginAccepted:'.length));
-  const existingAcceptances = parsedSettings.pluginAcceptances[currentPath] ?? [];
+  // Per-file acceptances shown for the current file are replaced by whether their box is checked.
+  const listedAcceptances = new Set(data.getAll('pluginAcceptanceListed').map(String));
+  const acceptedForCurrentFile = [...listedAcceptances].filter((key) => data.has(`pluginAccepted:${key}`));
+  const existingAcceptances = currentFile ? parsedSettings.pluginAcceptances[currentFile] ?? [] : [];
   const nextCurrentAcceptances = [
-    ...existingAcceptances.filter((key) => !visiblePluginKeys.has(key)),
+    ...existingAcceptances.filter((key) => !listedAcceptances.has(key)),
     ...acceptedForCurrentFile,
   ];
-  const pluginAcceptances = currentPath && visiblePluginKeys.size > 0
+  const pluginAcceptances = currentFile && listedAcceptances.size > 0
     ? {
       ...parsedSettings.pluginAcceptances,
-      ...(nextCurrentAcceptances.length > 0 || currentPath in parsedSettings.pluginAcceptances
-        ? { [currentPath]: nextCurrentAcceptances }
+      ...(nextCurrentAcceptances.length > 0 || currentFile in parsedSettings.pluginAcceptances
+        ? { [currentFile]: nextCurrentAcceptances }
         : {}),
     }
     : parsedSettings.pluginAcceptances;
+  // Web services listed for the current file and unchecked are revoked; the next use asks again.
+  const revokedServices = data.getAll('serviceApprovalListed').map(String).filter((capabilityId) => !data.has(`serviceApproved:${capabilityId}`));
+  const webServiceApprovals = currentFile
+    ? revokedServices.reduce((approvals, capabilityId) => revokeAuthorization(approvals, currentFile, capabilityId), parsedSettings.webServiceApprovals)
+    : parsedSettings.webServiceApprovals;
   const homepageSelection = String(data.get('homepageSelection') ?? '');
   const homepage = homepageSelection.startsWith('included:')
-    ? normalizeHomepageSetting({ kind: 'included', id: homepageSelection.slice('included:'.length) })
+    ? homepageFromStorage(normalizeHomepageSetting({ kind: 'included', id: homepageSelection.slice('included:'.length) }))
     : homepageSelection === 'file'
-      ? normalizeHomepageSetting({ kind: 'file', path: String(data.get('homepagePath') ?? '') })
+      ? homepageFromStorage(normalizeHomepageSetting({ kind: 'file', path: String(data.get('homepagePath') ?? '') }))
       : homepageSelection === 'none'
         ? { kind: 'none' as const }
         : parsedSettings.homepage;
@@ -531,6 +543,11 @@ export function readAppSettingsForm(data: FormData, currentPath = ''): AppSettin
       : parsedSettings.debugLogMaxBytes,
     pluginPolicies,
     pluginAcceptances,
+    webServiceApprovals,
+    webCollectionLimits: data.has('webCollectionPerSite')
+      ? normalizeCollectionWorkerLimits({ perSite: Number(data.get('webCollectionPerSite')), total: Number(data.get('webCollectionTotal')), apiCalls: Number(data.get('webApiCalls')), queueJobs: Number(data.get('webQueueJobs')) })
+      : parsedSettings.webCollectionLimits,
+    scheduledJobsAtOnce: data.has('scheduledJobsAtOnce') ? normalizeScheduledJobsAtOnce(Number(data.get('scheduledJobsAtOnce'))) : parsedSettings.scheduledJobsAtOnce,
   };
 }
 
@@ -544,9 +561,14 @@ export function readDebugLogSettingsControls(root: HTMLElement, current: AppSett
   };
 }
 
+/** The settings form's settings, carried as saved (each file by its path), held by each file's reference. */
 export function parseAppSettings(value: string): AppSettings {
+  return appSettingsFromStorage(parseStoredAppSettings(value));
+}
+
+function parseStoredAppSettings(value: string): StoredAppSettings {
   try {
-    const parsed = JSON.parse(value) as Partial<AppSettings>;
+    const parsed = JSON.parse(value) as Partial<StoredAppSettings>;
     return {
       homepage: normalizeHomepageSetting(parsed.homepage),
       imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(parsed.imageAttachmentMaxDimensions),
@@ -566,6 +588,10 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityProfileBindings: normalizeWebCapabilityProfileBindings(parsed.webCapabilityProfileBindings),
       webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(parsed.webCapabilityAuthorizations),
       integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(parsed.integrationWebMcpApprovals),
+      webServiceApprovals: normalizeCapabilityAuthorizations(parsed.webServiceApprovals),
+      webCollectionLimits: normalizeCollectionWorkerLimits(parsed.webCollectionLimits),
+      scheduledDocuments: normalizeScheduledDocuments(parsed.scheduledDocuments),
+      scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(parsed.scheduledJobsAtOnce),
     };
   } catch {
     return {
@@ -581,6 +607,10 @@ export function parseAppSettings(value: string): AppSettings {
       webCapabilityProfileBindings: {},
       webCapabilityAuthorizations: {},
       integrationWebMcpApprovals: {},
+      webServiceApprovals: {},
+      webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
+      scheduledDocuments: {},
+      scheduledJobsAtOnce: DEFAULT_SCHEDULED_JOBS_AT_ONCE,
     };
   }
 }

@@ -258,7 +258,7 @@ export function showFileContextMenu(
     if (button.dataset.menuAction === 'reveal') handlers.showFileInFolder(path);
     if (button.dataset.menuAction === 'rename') handlers.renameFile(path, name);
     if (button.dataset.menuAction === 'convert-workspace-file' && conversion) handlers.convertWorkspaceFileKind(path, workspacePath, conversion.toTemplate);
-    if (button.dataset.menuAction === 'archive') handlers.archiveFile(path, name);
+    if (button.dataset.menuAction === 'archive') handlers.confirmArchiveFile(path, name);
     if (button.dataset.menuAction === 'restore') handlers.restoreFile(path, name);
     if (button.dataset.menuAction === 'lock') handlers.setFileLocked(path, name, true);
     if (button.dataset.menuAction === 'unlock') handlers.setFileLocked(path, name, false);
@@ -328,6 +328,7 @@ export function showWorkspaceContextMenu(
     ${targetDirectory ? '<button class="hvy-galaxy-button" type="button" data-menu-action="filter">Filter Folder</button>' : ''}
     ${targetDirectory ? '<button class="hvy-galaxy-button" type="button" data-menu-action="chat">Chat Folder</button>' : '<button class="hvy-galaxy-button" type="button" data-menu-action="chat">Chat Workspace</button>'}
     <button class="hvy-galaxy-button" type="button" data-menu-action="${hiddenFromAI ? 'unhide-from-ai' : 'hide-from-ai'}">${hiddenFromAI ? 'Unhide from AI' : 'Hide from AI'}</button>
+    ${targetDirectory ? '<button class="hvy-galaxy-button" type="button" data-menu-action="rename-folder">Rename</button>' : ''}
     ${targetDirectory ? `<button class="hvy-galaxy-button" type="button" data-menu-action="delete-folder" title="${escapeAttr(deleteTitle)}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>` : ''}
   `;
   const cleanup = () => {
@@ -349,7 +350,7 @@ export function showWorkspaceContextMenu(
     if (button.dataset.menuAction === 'new-folder') handlers.openNewFolder(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'new-encrypted-folder') handlers.openNewFolder(workspacePath, targetDirectory, true);
     if (button.dataset.menuAction === 'new-document') handlers.newDocumentInWorkspace(workspacePath, targetDirectory);
-    if (button.dataset.menuAction === 'rename-folder') handlers.renameEncryptedFolder(workspacePath, targetDirectory, deleteInfo?.folderName ?? targetDirectory.split('/').filter(Boolean).at(-1) ?? 'Encrypted folder');
+    if (button.dataset.menuAction === 'rename-folder') handlers.renameFolder(workspacePath, targetDirectory, deleteInfo?.folderName ?? targetDirectory.split('/').filter(Boolean).at(-1) ?? encryptedFolderName, encryptedFolder);
     if (button.dataset.menuAction === 'add-files') handlers.addFilesToWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'import') handlers.openImportInWorkspace(workspacePath, targetDirectory);
     if (button.dataset.menuAction === 'paste') handlers.pasteWorkspaceClipboard(workspacePath, targetDirectory);

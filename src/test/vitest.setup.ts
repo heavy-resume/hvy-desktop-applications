@@ -1,4 +1,9 @@
-import { beforeEach } from 'vitest';
+import { fileURLToPath } from 'node:url';
+import { beforeEach, vi } from 'vitest';
+
+// Vite serves sql.js's wasm at a URL; under Node a document's database (the reference implementation's db-table runtime,
+// which scripts' doc.db and the SQL record store open) loads it from the file.
+vi.mock('../../../heavy-file-format/node_modules/sql.js/dist/sql-wasm.wasm?url', () => ({ default: fileURLToPath(new URL('../../../heavy-file-format/node_modules/sql.js/dist/sql-wasm.wasm', import.meta.url)) }));
 
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -41,3 +46,6 @@ beforeEach(() => {
   session.clear();
   installBrowserStorage();
 });
+
+// Node's navigator has no onLine: the machine is online, as a page's navigator says (web automation's network gate).
+Object.defineProperty(globalThis.navigator, 'onLine', { configurable: true, value: true });

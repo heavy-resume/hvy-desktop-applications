@@ -13,8 +13,10 @@ vi.hoisted(() => {
 const backendMocks = vi.hoisted(() => ({
   createEncryptedFolderDocument: vi.fn(),
   loadWorkspace: vi.fn(),
+  moveDocumentToWorkspace: vi.fn(),
   readDocumentFile: vi.fn(),
   reauthorizeWorkspace: vi.fn(),
+  saveAppSettings: vi.fn(async (settings: unknown) => settings),
   saveDocumentToWorkspace: vi.fn(),
   updateMcpWorkspaces: vi.fn(() => Promise.resolve()),
 }));
@@ -25,8 +27,10 @@ vi.mock('./backend', async (importOriginal) => ({
   ...await importOriginal<typeof import('./backend')>(),
   createEncryptedFolderDocument: backendMocks.createEncryptedFolderDocument,
   loadWorkspace: backendMocks.loadWorkspace,
+  moveDocumentToWorkspace: backendMocks.moveDocumentToWorkspace,
   readDocumentFile: backendMocks.readDocumentFile,
   reauthorizeWorkspace: backendMocks.reauthorizeWorkspace,
+  saveAppSettings: backendMocks.saveAppSettings,
   saveDocumentToWorkspace: backendMocks.saveDocumentToWorkspace,
   updateMcpWorkspaces: backendMocks.updateMcpWorkspaces,
 }));
@@ -60,10 +64,15 @@ const mainMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./main', () => mainMocks);
+vi.mock('./ui/core', () => ({ MIN_PASTED_IMPORT_CHARS: 250 }));
 
 import { decryptFolderManifest, encryptFolderManifest } from './encryptedFolders';
-import { copyOpenWorkspaceFileToWorkspace, applyArchivedFileRelocations, creationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
-import { state } from './state';
+import { copyOpenWorkspaceFileToWorkspace, moveOpenWorkspaceFileToWorkspace, relocateFiles, creationTemplate, isBlankCreationTemplate, loadWorkspaceEntry, reorderedWorkspaceEntries, retryWorkspaceEntry, sortedWorkspaceEntries, upsertWorkspace, workspaceDisplayNameFromPath } from './mainWorkspaceUtils';
+import { runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile } from './runtimeDocuments';
+import { appSettingsForStorage } from './appSettingsFiles';
+import { defaultAppSettings } from './backend';
+import { state, type AppState } from './state';
+import { renderNewDocumentDialog } from './ui/render-import';
 import { decryptDocumentEnvelopeBytes, encryptDocumentBytes, isEncryptedDocumentBytes } from '../../heavy-file-format/src/encryption';
 
 beforeEach(() => {
@@ -71,6 +80,45 @@ beforeEach(() => {
   backendMocks.readDocumentFile.mockReset();
   backendMocks.saveDocumentToWorkspace.mockReset();
   mainMocks.refreshRecents.mockReset();
+});
+
+describe('isBlankCreationTemplate', () => {
+  const dialogTemplateIds = (): string[] => [...renderNewDocumentDialog({
+    ...state,
+    newDocumentWorkspacePath: '/workspace',
+    newDocumentDirectory: '',
+    newDocumentType: 'hvy',
+    workspaces: [{ path: '/workspace', manifest: { name: 'Work' }, files: [] }],
+  } as unknown as AppState).matchAll(/<option value="([^"]*)">([^<]*)<\/option>/g)].map((match) => `${match[1]}|${match[2]}`);
+
+  beforeEach(() => {
+    state.workspaces = [{ path: '/workspace', manifest: { schemaVersion: 1, name: 'Work', createdAt: '', updatedAt: '' }, files: [] }];
+    state.savedTemplates = [{
+      id: '/workspace/templates/Resume.thvy',
+      path: '/workspace/templates/Resume.thvy',
+      name: 'Resume.thvy',
+      scope: 'workspace',
+      extension: '.thvy',
+      bytes: Array.from(new TextEncoder().encode('---\nhvy_version: 0.1\ntitle: Resume\n---\n')),
+    }];
+  });
+
+  it('treats the New Document dialog default None option as blank', () => {
+    const [defaultOption] = dialogTemplateIds();
+    const [templateId, label] = defaultOption!.split('|');
+
+    expect(label).toBe('None');
+    expect(isBlankCreationTemplate('/workspace', 'hvy', templateId!)).toBe(true);
+  });
+
+  it('does not treat bundled or saved templates as blank', () => {
+    const ids = dialogTemplateIds().map((option) => option.split('|')[0]!);
+
+    expect(ids).toContain('meeting-minutes.thvy');
+    expect(ids).toContain('/workspace/templates/Resume.thvy');
+    expect(isBlankCreationTemplate('/workspace', 'hvy', 'meeting-minutes.thvy')).toBe(false);
+    expect(isBlankCreationTemplate('/workspace', 'hvy', '/workspace/templates/Resume.thvy')).toBe(false);
+  });
 });
 
 describe('creationTemplate', () => {
@@ -110,9 +158,9 @@ title: "Notes"
   });
 });
 
-describe('applyArchivedFileRelocations', () => {
+describe('relocateFiles', () => {
   it('moves history and recovery state to the archived file new path', async () => {
-    await applyArchivedFileRelocations([{
+    await relocateFiles([{
       previousPath: '/workspace/folder/draft.hvy',
       path: '/workspace/folder/draft 2.hvy',
       name: 'draft 2.hvy',
@@ -133,6 +181,61 @@ describe('applyArchivedFileRelocations', () => {
       'draft.hvy',
       expect.objectContaining({ path: '/workspace/folder/draft 2.hvy', name: 'draft 2.hvy' }),
     );
+  });
+
+  it('uses the name the file had when it differs from its file name', async () => {
+    await relocateFiles([{
+      previousPath: '/workspace/private/abc.hvy',
+      previousName: 'Plans.hvy',
+      path: '/workspace/private/abc.hvy',
+      name: 'Roadmap.hvy',
+      extension: '.hvy',
+    }]);
+
+    expect(mainMocks.relocateRecoveryDraftsForDocument).toHaveBeenCalledWith(
+      '/workspace/private/abc.hvy',
+      'Plans.hvy',
+      expect.objectContaining({ name: 'Roadmap.hvy' }),
+    );
+  });
+
+  it('gives every file a loaded workspace holds its reference', () => {
+    upsertWorkspace({
+      path: '/workspace',
+      manifest: { schemaVersion: 1 as const, name: 'Workspace', createdAt: '', updatedAt: '' },
+      files: [{ kind: 'folder', name: 'notes', path: '/workspace/notes', relativePath: 'notes', children: [
+        { kind: 'file', name: 'plan.hvy', path: '/workspace/notes/plan.hvy', relativePath: 'notes/plan.hvy', extension: '.hvy' },
+      ] }],
+    });
+
+    expect(runtimeDocumentAtPath('/workspace/notes/plan.hvy')).toMatchObject({ name: 'plan.hvy', extension: '.hvy' });
+  });
+
+  it('saves the settings kept for a moved file again, with its new path', async () => {
+    const file = runtimeDocumentForFile({ path: '/workspace/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' });
+    mainMocks.updateOpenDocumentFile.mockImplementationOnce((_previous: string, next: { path: string; name: string; extension: '.hvy' }) => updateRuntimeDocumentFile(file, next));
+    state.appSettings = { ...defaultAppSettings(), pluginAcceptances: { [file.documentId]: ['galaxy.schedule'] } };
+
+    await relocateFiles([{ previousPath: '/workspace/jobs.hvy', path: '/workspace/notes/jobs.hvy', name: 'jobs.hvy', extension: '.hvy' }]);
+
+    expect(backendMocks.saveAppSettings).toHaveBeenCalled();
+    expect(appSettingsForStorage(state.appSettings).pluginAcceptances).toEqual({ '/workspace/notes/jobs.hvy': ['galaxy.schedule'] });
+  });
+
+  it('keeps a moved file history with it', async () => {
+    const workspace = { path: '/workspace', manifest: { schemaVersion: 1 as const, name: 'Workspace', createdAt: '', updatedAt: '' }, files: [] };
+    state.workspaces = [workspace];
+    backendMocks.loadWorkspace.mockResolvedValue(workspace);
+    backendMocks.moveDocumentToWorkspace.mockResolvedValueOnce({
+      path: '/workspace/notes/draft.hvy',
+      name: 'draft.hvy',
+      extension: '.hvy',
+      bytes: [],
+    });
+
+    await moveOpenWorkspaceFileToWorkspace('/workspace/draft.hvy', '/workspace', 'notes');
+
+    expect(historyMocks.relocateDocumentHistory).toHaveBeenCalledWith('/workspace/draft.hvy', '/workspace/notes/draft.hvy', 'draft.hvy');
   });
 });
 

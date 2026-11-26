@@ -5,12 +5,15 @@ import { documentEncryptionKeyring } from './documentKeys';
 import { findEncryptedFolder, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderImportedDocumentMutation, workspaceHasLogicalName } from './encryptedFolders';
 import { getFileActionAvailability } from './fileActions';
 import { deserializeHvy, getMountedDocument, mountHvyDocument, serializeHvy, serializeMountedDocumentAsync, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
-import { getTemplateById, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
-import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, updateHomepageDocumentPath } from './mainUtilities';
+import { getTemplateById, isBlankBundledTemplate, mergeSavedTemplates, templatesForDocumentType, workspaceTemplateVisibility } from './templates';
+import { applyTemplateTitle, defaultHvyDocument, documentFileName, documentTypeForExtension, hasDocumentExtension, normalizeAiMaxContextChars, normalizeImageAttachmentMaxDimensions, saveSettingsForMovedFile } from './mainUtilities';
 import { displayDocumentName } from './mainWorkspaceFilter';
-import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, documentSessions, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
+import { adoptSavedAsDocument, clearRecoveryDraftsForDocument, deleteDocumentSession, fileNameFromPath, openDocument, pendingMountDocument, readDocumentColorPreference, refreshRecents, relocateRecoveryDraftsForDocument, updateOpenDocumentFile, rerender, runBusy, updateCurrentDocumentSession } from './main';
 import { recordSuccessfulDocumentSave } from './documentHistory';
 import { logDebugEvent } from './debugLog';
+import { runtimeDocumentForFile } from './runtimeDocuments';
+import { flattenWorkspaceFiles } from './workspaceFiles';
+import { prunedFolderExpansion, saveWorkspaceFolderExpansionState } from './workspaceExpansionState';
 import { recoveryDraftIdentity } from './recoveryDocuments';
 
 let lastFileMenuStateKey: string | null = null;
@@ -79,6 +82,7 @@ export async function saveCurrentDocumentToWorkspace(workspacePath: string, name
     targetDirectory,
     bytes,
   });
+  await relocateFiles(file.relocatedArchivedFiles);
   adoptSavedAsDocument(file, mounted, document, previousMode, previousPath, previousUseDocumentColors);
   recordSuccessfulDocumentSave(file.path, file.name, document);
   state.selectedFilePath = file.path;
@@ -104,9 +108,10 @@ export async function saveImportedDocumentToWorkspace(
     targetDirectory,
     bytes,
   });
-  documentSessions.delete(file.path);
+  await relocateFiles(file.relocatedArchivedFiles);
+  deleteDocumentSession(file.path);
   upsertWorkspace(await loadWorkspace(workspacePath));
-  await openDocument({ ...file, bytes }, { deferMount: true });
+  await openDocument({ ...file, bytes }, { deferMount: true, created: true });
   await refreshRecents();
   await clearRecoveryDraftsForDocument(file.path, file.name);
   state.status = `Saved to ${file.name}`;
@@ -145,9 +150,8 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   const sourceEncrypted = Boolean(sourceNode?.encryptedFolderKeyId);
   if (!sourceEncrypted && !destinationFolder) {
     const file = await moveDocumentToWorkspace({ path, workspacePath, targetDirectory });
-    await applyArchivedFileRelocations(file.relocatedArchivedFiles);
-    await updateHomepageDocumentPath(path, file.path);
-    await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
+    await relocateFiles(movedFile(path, file));
+    await finishWorkspaceFileRelocation(workspacePath, file, sourceWorkspacePath);
     state.status = `Moved to ${file.name}`;
     return;
   }
@@ -209,9 +213,8 @@ export async function moveOpenWorkspaceFileToWorkspace(path: string, workspacePa
   } else {
     await deleteDocumentFile(path);
   }
-  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
-  await updateHomepageDocumentPath(path, file.path);
-  await applyWorkspaceFileRelocation(path, workspacePath, file, sourceWorkspacePath);
+  await relocateFiles(movedFile(path, file));
+  await finishWorkspaceFileRelocation(workspacePath, file, sourceWorkspacePath);
   state.status = `Moved to ${file.name}`;
 }
 
@@ -224,7 +227,7 @@ export async function copyOpenWorkspaceFileToWorkspace(path: string, workspacePa
   const sourceEncrypted = Boolean(sourceNode?.encryptedFolderKeyId);
   if (!sourceEncrypted && !destinationFolder) {
     const file = await copyDocumentToWorkspace({ path, workspacePath, targetDirectory });
-    await applyArchivedFileRelocations(file.relocatedArchivedFiles);
+    await relocateFiles(file.relocatedArchivedFiles);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
     state.status = `Copied to ${file.name}`;
@@ -265,7 +268,7 @@ export async function copyOpenWorkspaceFileToWorkspace(path: string, workspacePa
     });
     file = { ...created, bytes: sourceFile.bytes };
   }
-  await applyArchivedFileRelocations(file.relocatedArchivedFiles);
+  await relocateFiles(file.relocatedArchivedFiles);
   upsertWorkspace(await loadWorkspace(workspacePath));
   state.selectedWorkspacePath = workspacePath;
   state.status = `Copied to ${file.name}`;
@@ -313,36 +316,31 @@ export async function convertOpenWorkspaceFileKind(path: string, workspacePath: 
       manifestBytes: removal.manifestBytes,
     });
     const file = { ...created, bytes: sourceFile.bytes };
-    await updateHomepageDocumentPath(path, file.path);
+    await relocateFiles(movedFile(path, file));
     state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
-    await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
+    await finishWorkspaceFileRelocation(workspacePath, file, workspacePath);
     await refreshSavedTemplates(workspacePath);
     state.status = `${toTemplate ? 'Converted to template' : 'Converted to document'}: ${file.name}`;
     return;
   }
   const file = await convertWorkspaceDocumentKind({ path, workspacePath, toTemplate });
-  await updateHomepageDocumentPath(path, file.path);
+  await relocateFiles(movedFile(path, file));
   state.workspaceFileViews[workspacePath] = toTemplate ? 'templates' : 'documents';
-  await applyWorkspaceFileRelocation(path, workspacePath, file, workspacePath);
+  await finishWorkspaceFileRelocation(workspacePath, file, workspacePath);
   await refreshSavedTemplates(workspacePath);
   state.status = `${toTemplate ? 'Converted to template' : 'Converted to document'}: ${file.name}`;
 }
 
-async function applyWorkspaceFileRelocation(
-  path: string,
+// After relocateFiles: the open document's session and the workspaces it moved between.
+async function finishWorkspaceFileRelocation(
   workspacePath: string,
   file: DocumentFile,
   sourceWorkspacePath: string | null,
 ): Promise<void> {
-  const currentDocument = state.document?.source.path === path && state.document.virtual !== 'versionHistory'
+  const currentDocument = state.document?.source.path === file.path && state.document.virtual !== 'versionHistory'
     ? state.document
     : null;
   const mountedDocument = currentDocument?.mounted?.document ?? pendingMountDocument;
-  updateOpenDocumentFile(path, file);
-  await relocateRecoveryDraftsForDocument(path, fileNameFromPath(path), file);
-  if (state.selectedFilePath === path) {
-    state.selectedFilePath = file.path;
-  }
   state.selectedWorkspacePath = workspacePath;
   if (currentDocument) {
     if (mountedDocument) {
@@ -357,7 +355,7 @@ async function applyWorkspaceFileRelocation(
 }
 
 export async function finishAddingFilesToWorkspace(result: AddFilesResult, status: string): Promise<void> {
-  await applyArchivedFileRelocations(result.relocatedArchivedFiles);
+  await relocateFiles(result.relocatedArchivedFiles);
   upsertWorkspace(result.workspace);
   state.selectedWorkspacePath = result.workspace.path;
   state.status = status;
@@ -369,18 +367,32 @@ export async function finishAddingFilesToWorkspace(result: AddFilesResult, statu
   await openDocument(file, { deferMount: true });
 }
 
-export async function applyArchivedFileRelocations(relocations: WorkspaceFileRelocation[] = []): Promise<void> {
+/** A file's move, and its name before when that isn't its file name (an encrypted folder's documents are named in its manifest). */
+export interface FileRelocation extends WorkspaceFileRelocation {
+  previousName?: string;
+}
+
+/**
+ * The one place an in-app move of a file is applied: rename, move, convert, a folder renamed around it, or an archived
+ * file renamed aside. Its reference takes the new path, which is all that what holds the file in memory needs; what is
+ * saved by path (app settings, version history, recovery drafts) is saved again with it. Callers say what moved.
+ */
+export async function relocateFiles(relocations: FileRelocation[] = []): Promise<void> {
   for (const relocation of relocations) {
     updateOpenDocumentFile(relocation.previousPath, relocation);
     if (state.selectedFilePath === relocation.previousPath) state.selectedFilePath = relocation.path;
-    await updateHomepageDocumentPath(relocation.previousPath, relocation.path);
+    await saveSettingsForMovedFile(relocation.path);
     await relocateDocumentHistory(relocation.previousPath, relocation.path, relocation.name);
     await relocateRecoveryDraftsForDocument(
       relocation.previousPath,
-      fileNameFromPath(relocation.previousPath),
+      relocation.previousName ?? fileNameFromPath(relocation.previousPath),
       relocation,
     );
   }
+}
+
+function movedFile(previousPath: string, file: DocumentFile, previousName?: string): FileRelocation[] {
+  return [...(file.relocatedArchivedFiles ?? []), { previousPath, previousName, path: file.path, name: file.name, extension: file.extension }];
 }
 
 export async function droppedWorkspaceFilesFrom(files: File[]): Promise<DroppedWorkspaceFile[]> {
@@ -432,7 +444,18 @@ export function creationTemplate(
   return applyTemplateTitle(template.content, title);
 }
 
+export function isBlankCreationTemplate(
+  workspacePath: string | null | undefined,
+  documentType: DocumentCreationType,
+  templateId: string,
+): boolean {
+  if (documentType === 'hvy' && !hasDocumentExtension(templateId)) return true;
+  return isBlankBundledTemplate(getTemplateById(templatesForCurrentWorkspaceDocumentType(workspacePath, documentType), templateId));
+}
+
 export function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspace>>): void {
+  // Every file the workspace holds gets its reference, so what holds a file in memory holds that, not its path.
+  for (const file of flattenWorkspaceFiles(workspace.files)) runtimeDocumentForFile(file);
   const index = state.workspaces.findIndex((candidate) => candidate.path === workspace.path);
   if (index >= 0) {
     state.workspaces[index] = workspace;
@@ -440,6 +463,14 @@ export function upsertWorkspace(workspace: Awaited<ReturnType<typeof loadWorkspa
     state.workspaces.push(workspace);
   }
   sortWorkspaces();
+  const folderExpanded = state.workspaceFolderExpanded[workspace.path];
+  if (folderExpanded) {
+    const pruned = prunedFolderExpansion(folderExpanded, workspace.files);
+    if (Object.keys(pruned).length !== Object.keys(folderExpanded).length) {
+      state.workspaceFolderExpanded[workspace.path] = pruned;
+      saveWorkspaceFolderExpansionState(state.workspaceFolderExpanded);
+    }
+  }
   const entryIndex = state.workspaceEntries.findIndex((candidate) => candidate.path === workspace.path);
   const entry = { path: workspace.path, displayName: workspace.manifest.name, status: 'ready' as const, error: null };
   if (entryIndex >= 0) state.workspaceEntries[entryIndex] = entry;

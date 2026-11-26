@@ -3,6 +3,7 @@ import { createBlankDocument, createEmptyBlock, createEmptySection } from '../..
 import { deserializeDocumentBytes, serializeDocumentBytes } from '../../heavy-file-format/src/serialization';
 import { updateExampleContent } from './templateExampleContent';
 import { updateExampleDefinitions } from './templateExampleUpdates';
+import { createTextFillInMarker } from '../../heavy-file-format/src/text-fill-in';
 
 function fixture() {
   const before = createBlankDocument('.thvy');
@@ -126,7 +127,8 @@ it.each(['block', 'url'] as const)('keeps %s variable metadata through updating 
   const savedDefinition = (reopened.meta.component_defs as any[])[0];
   expect(extractReusableTemplateVariablesFromDefinition(savedDefinition).find((variable) => variable.name === 'biography')?.type).toBe(type);
   expect(reopened.sections[0].blocks[0].text).toContain('Ada Lovelace');
-  if (type === 'block') expect(reopened.sections[0].blocks[0].text).toContain('{% biography | block %}');
+  // The unfilled variable reopens as the reference's fill-in marker, named for it; its type stays on the definition.
+  if (type === 'block') expect(reopened.sections[0].blocks[0].text).toContain(createTextFillInMarker('Biography'));
 });
 
 it('leaves instance text alone when the source has not changed', () => {

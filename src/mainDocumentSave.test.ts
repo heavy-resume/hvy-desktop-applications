@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { SavedVersion } from './revisionModel';
 
 vi.hoisted(() => {
@@ -9,6 +10,7 @@ vi.hoisted(() => {
     removeItem: (key: string) => values.delete(key),
   });
   vi.stubGlobal('window', {});
+  vi.stubGlobal('requestAnimationFrame', vi.fn());
 });
 
 const backendMocks = vi.hoisted(() => ({
@@ -69,6 +71,12 @@ vi.mock('./hvy', () => ({
   serializeMountedDocumentAsync: vi.fn(async () => new Uint8Array([1, 2, 3])),
 }));
 vi.mock('./main', () => mainMocks);
+const webAutomationMocks = vi.hoisted(() => ({
+  backgroundWorkRunning: vi.fn((_document: object) => false),
+}));
+vi.mock('./webAutomation/app', () => webAutomationMocks);
+const toastMocks = vi.hoisted(() => ({ showToast: vi.fn() }));
+vi.mock('./ui/toast', () => toastMocks);
 vi.mock('./mainWorkspaceUtils', () => ({
   refreshOpenWorkspaceForFile: vi.fn(async () => undefined),
 }));
@@ -97,7 +105,7 @@ describe('saveCurrentDocument', () => {
       documentId: 'history-document',
       versionId: 'history-version',
       source: {
-        documentId: 'history-document',
+        documentId: 'history-document' as FileKey,
         workingVersionId: 'history-version',
         path: 'version-history:%2Fworkspace%2FExample.hvy:saved-version',
         name: 'Example.hvy — saved version',
@@ -130,7 +138,7 @@ describe('saveCurrentDocument', () => {
       documentId: 'document:example',
       versionId: 'version:example',
       source: {
-        documentId: 'document:example',
+        documentId: 'document:example' as FileKey,
         workingVersionId: 'version:example',
         path: '/workspace/Example.hvy',
         name: 'Example.hvy',
@@ -154,9 +162,41 @@ describe('saveCurrentDocument', () => {
     expect(mainMocks.renderAllAroundDocument).toHaveBeenCalledOnce();
   });
 
+  it('does not save while the document\'s background work runs, and says so in a toast', async () => {
+    const document = { sections: [] };
+    state.document = {
+      documentId: 'document:example',
+      versionId: 'version:example',
+      source: {
+        documentId: 'document:example' as FileKey,
+        workingVersionId: 'version:example',
+        path: '/workspace/Example.hvy',
+        name: 'Example.hvy',
+        extension: '.hvy',
+      },
+      mode: 'editor',
+      dirty: true,
+      readOnly: false,
+      hiddenFromAI: false,
+      isNew: false,
+      metaOpen: false,
+      mounted: { document, mount: {} } as never,
+      recoveryBackupId: null,
+      recoveryModified: false,
+    };
+    webAutomationMocks.backgroundWorkRunning.mockReturnValueOnce(true);
+
+    await saveCurrentDocument();
+
+    expect(webAutomationMocks.backgroundWorkRunning).toHaveBeenCalledWith(document);
+    expect(backendMocks.saveDocumentFile).not.toHaveBeenCalled();
+    expect(toastMocks.showToast).toHaveBeenCalledWith('Unable to save while background work is running');
+    expect(state.document.dirty).toBe(true);
+  });
+
   it('rebuilds the tab strip after promoting a recovery draft to the working version', async () => {
     const source = {
-      documentId: 'document:example',
+      documentId: 'document:example' as FileKey,
       workingVersionId: 'version:working',
       path: '/workspace/Example.md',
       name: 'Example.md',
@@ -328,7 +368,7 @@ describe('openSavedVersionPreview', () => {
       documentId: 'document:example',
       versionId: 'working-version',
       source: {
-        documentId: 'document:example',
+        documentId: 'document:example' as FileKey,
         workingVersionId: 'working-version',
         path: '/workspace/Example.hvy',
         name: 'Example.hvy',
@@ -432,6 +472,38 @@ describe('openSavedVersionPreview', () => {
     expect(state.saveAsKind).toBe('template');
     expect(state.saveAsScope).toBe(scope);
     state.savedTemplates = [];
+  });
+
+  it('names a new document after its first text line and selects the name for editing', () => {
+    state.document!.virtual = undefined;
+    state.document!.isNew = true;
+    state.document!.readOnly = false;
+    state.document!.source.extension = '.hvy';
+    state.document!.mounted = {
+      document: {
+        sections: [
+          { title: 'Unnamed Section', blocks: [{ text: '\n  \n', schema: {} }] },
+          { title: '', blocks: [{ text: '', schema: { containerBlocks: [{ text: '## Weekly *plan*: Q4/Q1 goals and reviews\nSecond line', schema: {} }] } }] },
+        ],
+      },
+      mount: {},
+    } as never;
+    state.workspaces = [];
+    state.savedTemplates = [];
+    vi.mocked(requestAnimationFrame).mockClear();
+
+    openSaveAsDialog();
+
+    expect(state.saveAsSuggestedName).toBe('Weekly plan Q4 Q1 goals');
+    const input = { select: vi.fn() };
+    const querySelector = vi.fn(() => input);
+    const originalDocument = globalThis.document;
+    vi.stubGlobal('document', { querySelector });
+    vi.mocked(requestAnimationFrame).mock.calls[0]![0](0);
+    vi.stubGlobal('document', originalDocument);
+    expect(querySelector).toHaveBeenCalledWith('.save-as-dialog input[name="fileName"], .save-as-dialog input[name="templateName"]');
+    expect(input.select).toHaveBeenCalled();
+    state.document!.isNew = false;
   });
 
   it('opens a saved version with the source AI policy and preserves history scroll position', async () => {

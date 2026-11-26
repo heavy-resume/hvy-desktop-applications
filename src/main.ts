@@ -4,10 +4,12 @@ import './styles.css';
 import type { HvyDocumentSearchDocument } from '../../heavy-file-format/src/search/types';
 import { readDocumentFile, saveAppSettings, saveDocumentColorPreference, saveDocumentModePreference, type DocumentExtension, type DocumentFile, type DocumentFileMetadata, type ImportSourceFile } from './backend';
 import { getDebugLogEntries, logDebugEvent, measureDebug, measureDebugAsync } from './debugLog';
+import { trace } from './traceLog';
 import { getFileActionAvailability } from './fileActions';
 import { applyMountedRecoveryState, deserializeHvy, getMountedRecoveryState, isMountedDocumentDirty, markMountedDocumentSaved, mountHvyDocument, powerScriptDescriptors, type HvyMode, type MountedDocument, type VisualDocument } from './hvy';
 import { attachMatchingSidecarEmbeddingIndex, writePreparedDocumentEmbeddingSidecar } from './embeddingIndex';
 import { state } from './state';
+import { hasBackgroundWork, releaseWebAutomation, setAutomationChangeMarker, setOpenDocumentCheck, watchBackgroundWork } from './webAutomation/app';
 import { removeRuntimeDocument, runtimeDocumentAtPath, runtimeDocumentForFile, updateRuntimeDocumentFile, type RuntimeDocument } from './runtimeDocuments';
 import { createHandlers } from './mainHandlers';
 import { applyAppColorTheme, boot, refreshRecents } from './mainStartup';
@@ -24,10 +26,10 @@ import { captureDocumentViewState, restoreDocumentViewState, type DocumentViewSt
 import { documentDirtyAfterMountedChange, mountedDocumentDirtyAfterMount, recoveryDocumentTabName } from './recoveryDocuments';
 import { documentFileWithWorkspaceName } from './workspaceFiles';
 export { applyWorkspaceFilterToCurrentDocument, clearWorkspaceFilter, createWorkspaceFilterSnapshotForDocument, ensureWorkspaceFileAiAccess, normalizeFilePath, submitWorkspaceFilter, syncOpenDocumentAiAccess, syncOpenDocumentWorkspaceAccess, workspaceFileAiAccess, displayDocumentName } from './mainWorkspaceFilter';
-export { backupDocumentKey, cancelSaveConflict, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, closeTargetDocumentWithoutSaving, commitTabStack, confirmSaveConflict, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, relocateRecoveryDraftsForDocument, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
+export { backupDocumentKey, cancelSaveConflict, clearActiveRestoredBackupSuppression, clearRecoveryDraftsForDocument, closeAppWithoutSaving, closeCurrentDocument, closeDocumentTab, closeDocumentWithoutSaving, commitTabStack, confirmSaveConflict, cycleTabStack, deleteBackupTracking, discardRecoveryStateForBackup, exportCurrentDocumentPdf, handleAppCloseRequest, hasUnsavedWritableDocument, markActiveDocumentBackupChanged, markRestoredBackupSuppression, moveBackupTracking, relocateRecoveryDraftsForDocument, openRecoveryDialog, openRecoveryDialogOnBoot, openSaveAsDialog, openSavedVersionPreview, openVersionHistory, saveAndCloseApp, saveAndCloseDocument, saveBeforeExportPdf, saveCurrentDocument, saveCurrentDocumentAsAnywhere, scheduleBackupActiveDocument, selectDocumentTab, setupRecoveryLifecycle, startBackupTimer } from './mainDocumentSave';
 export { recoveryDocumentId } from './recoveryDocuments';
-export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, applyArchivedFileRelocations, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, upsertWorkspace, sortWorkspaces, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed, type WorkspaceOrderSort } from './mainWorkspaceUtils';
-export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder, updateHomepageDocumentPath, clearHomepageDocumentPath, clearArchivedHomepageDocument } from './mainUtilities';
+export { refreshOpenWorkspaceForFile, createBlankDocument, currentDocumentCanSaveToWorkspace, openWorkspaceTransfer, workspaceTransferBusyLabel, saveCurrentDocumentToWorkspace, saveImportedDocumentToWorkspace, createTemporaryImportMount, moveOpenWorkspaceFileToWorkspace, copyOpenWorkspaceFileToWorkspace, convertOpenWorkspaceFileKind, finishAddingFilesToWorkspace, relocateFiles, droppedWorkspaceFilesFrom, workspacePathForFile, loadWorkspace, loadWorkspaceEntry, retryWorkspaceEntry, workspaceDisplayNameFromPath, showWorkspaceDocumentsView, refreshSavedTemplates, templatesForCurrentWorkspaceDocumentType, creationTemplate, isBlankCreationTemplate, upsertWorkspace, sortWorkspaces, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncFileMenuState, hasOpenWorkspaceNamed, type WorkspaceOrderSort } from './mainWorkspaceUtils';
+export { defaultHvyDocument, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, syncRenamedTemplateMetadata, renameTemplateDefinitionEntries, hasDocumentExtension, templateFileName, pdfFileName, revealStatusLabel, applyTemplateTitle, documentStorageKey, normalizeDocumentMode, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, closeUiBeforeWorkspaceFilter, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cssEscape, closeMountedTransientUi, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, normalizeAiMaxContextChars, normalizeMaxConcurrentSemanticFilters, normalizeImageAttachmentMaxDimensions, effectiveImageAttachmentMaxDimensions, requestWorkspaceInitialization, createWorkspaceInChosenFolder, saveSettingsForMovedFile, clearHomepageDocumentPath, clearArchivedHomepageDocument } from './mainUtilities';
 import { render, renderAllAroundDocument as renderUiAroundDocument, renderModals, type UiHandlers } from './ui';
 export let mountRoot: HTMLElement | null = null;
 let mountGeneration = 0;
@@ -39,6 +41,7 @@ let workspaceFilterRenderQueued = false;
 const HOT_RELOAD_SESSION_STORAGE_KEY = 'hvy-galaxy:hot-reload-session';
 const DOCUMENT_MODE_STORAGE_KEY = 'hvy-galaxy:document-modes';
 const ZOOM_STORAGE_KEY = 'hvy-galaxy:zoom';
+const DISMISSED_RECENT_TABS_STORAGE_KEY = 'hvy-galaxy:dismissed-recent-tabs';
 const ZOOM_LEVELS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 const CHANGE_PERF_LOG_THRESHOLD_MS = 8;
 const CHANGE_PERF_SAMPLE_INTERVAL = 50;
@@ -85,6 +88,102 @@ export interface HotReloadSessionSnapshot {
 }
 type PreparedImportSource = ImportSourceFile & { text: string; sourceDocument?: VisualDocument };
 export const documentSessions = new Map<string, DocumentSession>();
+/**
+ * Drops an open document's session (its tab closed, the file archived or removed, or the session replaced). Once the app
+ * no longer holds the document, its web automation is released: its queues detach, and Background activity no longer
+ * lists them. A document still held elsewhere (mounted, or another session) keeps its automation.
+ */
+export function deleteDocumentSession(versionId: string): void {
+  const session = documentSessions.get(versionId);
+  documentSessions.delete(versionId);
+  takeParkedMount(versionId)?.mounted.mount.destroy();
+  if (session) releaseWebAutomation(session.document);
+}
+// A document stays open while it is in the document pane or a background tab; web automation closes only then.
+setOpenDocumentCheck((document) => state.document?.mounted?.document === document || [...documentSessions.values()].some((session) => session.document === document));
+/**
+ * A document in a background tab changed (its automation wrote into it, or its scripts did, while its mount was kept):
+ * it is unsaved from then, so switching back keeps what was written rather than reading the file again.
+ */
+function markBackgroundDocumentChanged(document: object): void {
+  if (state.document?.mounted?.document === document) return;
+  const session = [...documentSessions.values()].find((candidate) => candidate.document === document);
+  if (!session || session.dirty) return;
+  session.dirty = true;
+  syncDocumentTabs();
+  rerender({ preserveMountedDocument: true });
+}
+setAutomationChangeMarker(markBackgroundDocumentChanged);
+
+/**
+ * Mounts kept for tabs switched away from while their document has background work, by tab. A document's scripts only
+ * hear their callbacks (queue results, finished calls) while it is mounted, so its mount stays, detached (nothing drawn,
+ * its callbacks still running), until the work ends (then it goes, and the tab is a session as any other) or the tab
+ * closes. Its pane element goes with it, out of the page: the listeners Galaxy's mount wrappers bound to it (links,
+ * attachments, chat resizing) stay with that mount, not the next tab's. Switching back puts the element back in the pane
+ * and attaches the same mount to it, drawn again: nothing is loaded or run again.
+ */
+interface ParkedMount {
+  root: HTMLElement;
+  mounted: MountedDocument;
+  stopWatching: () => void;
+}
+const parkedMounts = new Map<string, ParkedMount>();
+
+/** The document pane's mount, as its tab is switched away from: kept while its document has background work, or destroyed. */
+function releaseCurrentMount(): void {
+  const current = state.document;
+  const mounted = current?.mounted;
+  if (!current || !mounted) return;
+  if (!mountRoot || current.virtual || !hasBackgroundWork(mounted.document)) {
+    mounted.mount.destroy();
+    return;
+  }
+  // The pane gets a fresh element for the next tab; this one leaves the page with its mount.
+  const root = mountRoot;
+  const fresh = globalThis.document.createElement('div');
+  fresh.id = root.id;
+  fresh.className = 'document-host';
+  root.replaceWith(fresh);
+  mounted.mount.detach?.();
+  mountRoot = fresh;
+  current.mounted = null;
+  mountThemeReapplyCleanup?.();
+  mountThemeReapplyCleanup = null;
+  const versionId = current.versionId;
+  const stopWatching = watchBackgroundWork(mounted.document, (busy) => {
+    if (!busy) takeParkedMount(versionId)?.mounted.mount.destroy();
+  });
+  parkedMounts.set(versionId, { root, mounted, stopWatching });
+}
+
+/** Whether a tab's mount is kept: switching to it puts that back, so its file needn't be read. */
+export function hasParkedMount(versionId: string): boolean {
+  return parkedMounts.has(versionId);
+}
+
+/** A tab's kept mount, no longer kept: the caller puts it back in the pane, or destroys it. */
+function takeParkedMount(versionId: string): ParkedMount | null {
+  const parked = parkedMounts.get(versionId);
+  if (!parked) return null;
+  parkedMounts.delete(versionId);
+  parked.stopWatching();
+  return parked;
+}
+
+/** A kept mount back in the document pane, as the open document's: as mountCurrentDocument leaves a new one. */
+function restoreParkedMount(parked: ParkedMount): void {
+  if (!state.document || !mountRoot) return;
+  mountRoot.replaceWith(parked.root);
+  parked.mounted.mount.attach?.(parked.root);
+  mountRoot = parked.root;
+  parked.mounted.generation = ++mountGeneration;
+  state.document.mounted = parked.mounted;
+  applyAppColorTheme();
+  mountThemeReapplyCleanup = bindMountThemeReapply(mountRoot);
+  applyDocumentZoom();
+  renderAllAroundDocument();
+}
 export const workspaceFilterDocumentCache = new Map<string, VisualDocument>();
 let openedDocumentTabOrder: string[] = [];
 let documentChangeEventCount = 0;
@@ -112,6 +211,7 @@ export function measurePerf<T>(
   callback: () => T,
   thresholdMs = CHANGE_PERF_LOG_THRESHOLD_MS,
 ): T {
+  trace(`start perf ${label}`, details);
   const startedAt = performance.now();
   try {
     return callback();
@@ -178,7 +278,7 @@ export function removeOpenDocumentFile(path: string): void {
   if (!document) return;
   for (const session of documentSessions.values()) {
     if (session.documentId !== document.documentId) continue;
-    documentSessions.delete(session.versionId);
+    deleteDocumentSession(session.versionId);
     removeDocumentTabPath(session.versionId);
   }
   if (state.document?.documentId === document.documentId) {
@@ -191,11 +291,15 @@ export function getTabStackIndex(): number {
   if (count === 0) return 0;
   return ((state.tabStackIndex % count) + count) % count;
 }
-export function defaultDocumentMode(extension: DocumentFile['extension'], options: { defaultDocument?: boolean; hiddenFromAI?: boolean } = {}): HvyMode {
+/**
+ * The mode a document opens in when Galaxy has none remembered for it. A document you just created opens ready to
+ * work on; one you did not create (opened, received, or added) opens in Viewer, to be read first.
+ */
+export function defaultDocumentMode(extension: DocumentFile['extension'], options: { defaultDocument?: boolean; hiddenFromAI?: boolean; created?: boolean } = {}): HvyMode {
   if (options.defaultDocument) return 'viewer';
   if (options.hiddenFromAI && extension === '.hvy') return 'viewer';
   if (extension === '.thvy' || extension === '.phvy') return 'editor';
-  if (extension === '.hvy') return 'ai';
+  if (extension === '.hvy') return options.created ? 'ai' : 'viewer';
   return 'viewer';
 }
 export function syncDocumentTabs(): void {
@@ -265,6 +369,7 @@ export function syncDocumentTabs(): void {
   if (state.tabStackIndex >= state.documentTabs.length) {
     state.tabStackIndex = 0;
   }
+  restoreReopenedRecentTabs();
   writeHotReloadSessionSnapshot();
 }
 export function activateWorkspaceChatDocument(): void {
@@ -273,8 +378,8 @@ export function activateWorkspaceChatDocument(): void {
   const source = runtimeDocumentForFile({ path, name: currentWorkspaceChatDocumentName(), extension: '.hvy' });
   preserveCurrentDocumentSession();
   markDocumentTabOpened(path);
+  releaseCurrentMount();
   resetMountLifecycleState();
-  state.document?.mounted?.mount.destroy();
   state.document = {
     documentId: source.documentId,
     versionId: path,
@@ -292,7 +397,7 @@ export function activateWorkspaceChatDocument(): void {
   };
   state.selectedFilePath = null;
 }
-export async function openDocument(physicalFile: DocumentFile, options: { source?: RuntimeDocument; reloadFromDisk?: boolean; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; initialMode?: HvyMode; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
+export async function openDocument(physicalFile: DocumentFile, options: { source?: RuntimeDocument; reloadFromDisk?: boolean; versionId?: string; defaultDocument?: boolean; defaultDocumentLabel?: string; includedDocumentId?: string; isNew?: boolean; recovered?: boolean; deferMount?: boolean; recoveryBackupId?: string | null; readOnly?: boolean; hiddenFromAI?: boolean; initialMode?: HvyMode; /** The user just created this document (from a template, an import, or blank). */ created?: boolean; historyPreview?: { sourcePath: string; sourceName: string; versionId: string } } = {}): Promise<void> {
   const file = documentFileWithWorkspaceName(physicalFile, state.workspaces);
   const source = options.source ?? runtimeDocumentForFile(file, { distinct: options.isNew || options.defaultDocument });
   if (source.path === file.path && (source.name !== file.name || source.extension !== file.extension)) {
@@ -310,16 +415,16 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
   preserveCurrentDocumentSession();
   state.externalFileChangePath = null;
   if (options.reloadFromDisk) {
-    documentSessions.delete(versionId);
+    deleteDocumentSession(versionId);
     workspaceFilterDocumentCache.delete(file.path);
   }
   markDocumentTabOpened(versionId);
-  measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, () => {
-    state.document?.mounted?.mount.destroy();
-  });
+  measureDebug('close', 'openDocument:destroyPreviousMount', { nextPath: file.path }, releaseCurrentMount);
   const storedSession = options.defaultDocument || options.recovered || options.isNew ? null : documentSessions.get(versionId);
   const viewSession = storedSession;
-  const session = storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory' || storedSession?.recoveryState
+  // A tab whose mount was kept (its document had background work) comes back as it is: its document, and its session.
+  const parked = storedSession ? takeParkedMount(versionId) : null;
+  const session = parked || storedSession?.dirty || storedSession?.isNew || storedSession?.readOnly || storedSession?.virtual === 'versionHistory' || storedSession?.recoveryState
     ? storedSession
     : null;
   const bytes = measureDebug('load', 'openDocument:bytesToUint8Array', { path: file.path, byteCount: file.bytes.length }, () => documentFileBytes(file));
@@ -338,7 +443,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
       };
   const readOnly = session?.readOnly ?? (options.readOnly === true || access.readOnly || options.defaultDocument === true);
   const configuredHiddenFromAI = session?.hiddenFromAI ?? (options.hiddenFromAI === true || access.hiddenFromAI);
-  const document = session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
+  const document = parked?.mounted.document ?? session?.document ?? cachedFilterDocument ?? await measureDebugAsync(
     'load',
     'openDocument:deserialize',
     { path: file.path, extension: file.extension, byteCount: bytes.byteLength },
@@ -365,7 +470,7 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
   const restoredMode = viewSession?.mode
     ?? readDocumentModePreference(file.path)
     ?? options.initialMode
-    ?? defaultDocumentMode(file.extension, { ...options, hiddenFromAI });
+    ?? defaultDocumentMode(file.extension, { ...options, created: options.created || options.isNew, hiddenFromAI });
   state.document = {
     documentId: source.documentId,
     versionId: session?.versionId ?? versionId,
@@ -427,8 +532,9 @@ export async function openDocument(physicalFile: DocumentFile, options: { source
     return;
   }
   measureDebug('load', 'openDocument:rerenderBeforeMount', { path: file.path }, () => rerender());
-  await mountCurrentDocument(document);
-  if (recoveryState && state.document?.mounted) {
+  if (parked) restoreParkedMount(parked);
+  else await mountCurrentDocument(document);
+  if (!parked && recoveryState && state.document?.mounted) {
     measureDebug('load', 'openDocument:applyRecoveryState', { path: file.path }, () => {
       applyMountedRecoveryState(state.document!.mounted!, recoveryState);
     });
@@ -538,7 +644,7 @@ export function adoptSavedAsDocument(
 ): void {
   const previousVersionId = state.document?.versionId ?? previousPath;
   if (previousVersionId) {
-    documentSessions.delete(previousVersionId);
+    deleteDocumentSession(previousVersionId);
     removeDocumentTabPath(previousVersionId);
   }
   const source = runtimeDocumentForFile(file, { distinct: true });
@@ -580,6 +686,15 @@ export function pathStartsWithWorkspace(path: string, workspacePath: string): bo
   const normalizedWorkspacePath = normalizeFilePath(workspacePath).replace(/\/+$/, '');
   return normalizedPath === normalizedWorkspacePath || normalizedPath.startsWith(`${normalizedWorkspacePath}/`);
 }
+/** Remounts the open document where the reader is, as switching back to its tab does. */
+export async function remountKeepingView(): Promise<void> {
+  const viewState = captureDocumentViewState(mountRoot);
+  const scrollRatio = captureMountScrollRatio(mountRoot);
+  await mountCurrentDocument();
+  await restoreDocumentViewState(mountRoot, viewState);
+  restoreMountScrollRatio(mountRoot, scrollRatio);
+}
+
 export async function mountCurrentDocument(document = state.document?.mounted?.document): Promise<void> {
   if (!state.document || !mountRoot || !document) return;
   const generation = ++mountGeneration;
@@ -613,7 +728,9 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
   });
   mountRoot.classList.toggle('is-hidden-from-ai', currentDocument.hiddenFromAI);
   const storedChatState = documentSessions.get(currentDocument.versionId)?.chatState ?? null;
-  const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(currentDocument.source.path)
+  // Power script approvals are kept by the file's reference.
+  const file = currentDocument.source.documentId;
+  const powerScripts = state.appSettings.powerScriptingAllowedFiles.includes(file)
     ? 'enabled'
     : 'prompt';
   const mounted = await measureDebugAsync('load', 'mountCurrentDocument:mountHvyDocument', { path, mode: currentDocument.mode }, () => mountHvyDocument(mountRoot!, document, currentDocument.mode, {
@@ -626,20 +743,22 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     imageAttachmentMaxDimensions: normalizeImageAttachmentMaxDimensions(state.appSettings.imageAttachmentMaxDimensions),
     powerScripts,
     getPowerScriptAcceptance: ({ fingerprint }) =>
-      (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint),
+      (state.appSettings.powerScriptAcceptances[file] ?? []).includes(fingerprint),
+    // Scripts that ran before the plugin was allowed run again, now with it; the reader keeps their place.
+    onPluginAllowed: () => void remountKeepingView(),
     onPowerScriptAcceptanceChanged: ({ document: acceptedDocument, fingerprint, accepted }) => {
-      if (!accepted || (state.appSettings.powerScriptAcceptances[path] ?? []).includes(fingerprint)) return;
-      const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[path] ?? []), fingerprint];
+      if (!accepted || (state.appSettings.powerScriptAcceptances[file] ?? []).includes(fingerprint)) return;
+      const acceptedFingerprints = [...(state.appSettings.powerScriptAcceptances[file] ?? []), fingerprint];
       const settings = {
         ...state.appSettings,
         powerScriptAcceptances: {
           ...state.appSettings.powerScriptAcceptances,
-          [path]: acceptedFingerprints,
+          [file]: acceptedFingerprints,
         },
         powerScriptAcceptanceScripts: {
           ...state.appSettings.powerScriptAcceptanceScripts,
-          [path]: {
-            ...(state.appSettings.powerScriptAcceptanceScripts[path] ?? {}),
+          [file]: {
+            ...(state.appSettings.powerScriptAcceptanceScripts[file] ?? {}),
             [fingerprint]: powerScriptDescriptors(acceptedDocument),
           },
         },
@@ -656,12 +775,12 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
             ...state.appSettings,
             powerScriptAcceptances: {
               ...state.appSettings.powerScriptAcceptances,
-              [path]: (state.appSettings.powerScriptAcceptances[path] ?? [])
+              [file]: (state.appSettings.powerScriptAcceptances[file] ?? [])
                 .filter((candidate) => candidate !== fingerprint),
             },
             powerScriptAcceptanceScripts: {
               ...state.appSettings.powerScriptAcceptanceScripts,
-              [path]: Object.fromEntries(Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+              [file]: Object.fromEntries(Object.entries(state.appSettings.powerScriptAcceptanceScripts[file] ?? {})
                 .filter(([candidate]) => candidate !== fingerprint)),
             },
           };
@@ -684,7 +803,11 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
         }
       : undefined,
     onDocumentChange: (event) => {
-      if (generation !== mountGeneration) return;
+      // A mount no longer the pane's (kept for its tab's background work): its changes leave that tab unsaved.
+      if ((baselineMount?.generation ?? generation) !== mountGeneration) {
+        if (event.dirty) markBackgroundDocumentChanged(document);
+        return;
+      }
       const changeStartedAt = performance.now();
       const dirtyBefore = state.document?.dirty ?? null;
       if (event.dirty && documentZoomDirtySuppressionDepth > 0) {
@@ -699,6 +822,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
         return;
       }
       const dirty = documentDirtyAfterMountedChange(event.dirty, state.document?.virtual, state.document?.isNew ?? false, baselineMount?.unsavedBaseline ?? mountStartedDirty);
+      if (baselineMount) baselineMount.changeCount = (baselineMount.changeCount ?? 0) + 1;
       setDocumentDirty(dirty);
       const durationMs = Math.round((performance.now() - changeStartedAt) * 10) / 10;
       documentChangeEventCount += 1;
@@ -718,6 +842,7 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     },
   }));
   mounted.unsavedBaseline = mountStartedDirty;
+  mounted.generation = generation;
   baselineMount = mounted;
   if (pendingMountRecoveryState) {
     measureDebug('load', 'mountCurrentDocument:applyPendingRecoveryState', { path }, () => {
@@ -749,6 +874,8 @@ export async function mountCurrentDocument(document = state.document?.mounted?.d
     });
     setDocumentDirty(nextDirty, { preserveStatus: true, recoveryBaseline: true });
   });
+  // The controls were drawn before this mount existed; they reflect it now, such as plugins waiting for approval.
+  renderAllAroundDocument();
 }
 export async function ensureCurrentDocumentMounted(): Promise<void> {
   if (!state.document || state.document.mounted) return;
@@ -913,6 +1040,7 @@ export function updateModeMetaChrome(): void {
   metaButton?.setAttribute('aria-pressed', openDocument.metaOpen ? 'true' : 'false');
 }
 export function rerender(options: { preserveMountedDocument?: boolean } = {}): void {
+  trace('rerender', options);
   const mountScrollRatio = options.preserveMountedDocument ? captureMountScrollRatio(mountRoot) : null;
   syncDocumentTabs();
   if (!options.preserveMountedDocument) {
@@ -927,6 +1055,7 @@ export function rerender(options: { preserveMountedDocument?: boolean } = {}): v
   restoreMountScrollRatio(mountRoot, mountScrollRatio);
 }
 export function renderAllAroundDocument(): void {
+  trace('renderAllAroundDocument');
   renderUiAroundDocument(state);
   applyZoomSettings();
   syncFileMenuState();
@@ -945,6 +1074,34 @@ export function loadZoomSettings(): void {
     state.appZoom = 1;
     state.documentZoom = 1;
   }
+}
+export function loadDismissedRecentTabs(): void {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DISMISSED_RECENT_TABS_STORAGE_KEY) ?? '[]') as unknown;
+    state.dismissedRecentTabs = Array.isArray(parsed) ? parsed.filter((path): path is string => typeof path === 'string') : [];
+  } catch {
+    state.dismissedRecentTabs = [];
+  }
+}
+function saveDismissedRecentTabs(): void {
+  try {
+    localStorage.setItem(DISMISSED_RECENT_TABS_STORAGE_KEY, JSON.stringify(state.dismissedRecentTabs));
+  } catch {
+    // Dismissed recent tabs are a per-machine convenience.
+  }
+}
+/** Hides a file from the recent tabs strip only; File > Recent Files keeps it. Reopening the file makes it eligible again. */
+export function dismissRecentTab(path: string): void {
+  if (state.dismissedRecentTabs.includes(path)) return;
+  state.dismissedRecentTabs = [...state.dismissedRecentTabs, path];
+  saveDismissedRecentTabs();
+}
+function restoreReopenedRecentTabs(): void {
+  const open = new Set(state.documentTabs.map((tab) => tab.sourcePath));
+  const remaining = state.dismissedRecentTabs.filter((path) => !open.has(path));
+  if (remaining.length === state.dismissedRecentTabs.length) return;
+  state.dismissedRecentTabs = remaining;
+  saveDismissedRecentTabs();
 }
 export function saveZoomSettings(): void {
   localStorage.setItem(ZOOM_STORAGE_KEY, JSON.stringify({
@@ -1084,7 +1241,7 @@ export function readDocumentModePreference(path: string): HvyMode | null {
   }
 }
 export function writeDocumentModePreference(path: string, mode: HvyMode): void {
-  if (!path) return;
+  if (!path || state.recent.documentModes?.[path] === mode) return;
   state.recent = {
     ...state.recent,
     documentModes: { ...(state.recent.documentModes ?? {}), [path]: mode },

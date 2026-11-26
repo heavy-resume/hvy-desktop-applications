@@ -1,20 +1,26 @@
+import { withJobOn, withoutUnused } from './webAutomation/scheduleSettings';
+import { fileKeyForPath, type FileKey } from './runtimeDocuments';
+import { scheduledJobKey } from './ui/render-scheduled-jobs';
+import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { fetchIntegrationRecords } from './integrationRecords';
 import { installAiChatClient } from './aiClient';
 import { beginDocumentKeyMigration, commitDocumentKeyMigration, finalizeDocumentKeyMigration, installMcpClient, installPluginPackage, loadWorkspace as loadWorkspaceBackend, openColorThemeDialog, openExternalUrl, removeMcpClient, restoreMcpClientBackup, rollbackDocumentKeyMigration, saveAiSettings, saveAppSettings, saveBinaryAsDialog, saveColorThemeAsDialog, saveMcpSettings, startMcpServer, stopMcpServer, type AiSettings, type McpClientInstallTarget, type Workspace } from './backend';
 import { createColorThemeFile, createSavedThemeId, getMatchedSavedThemeId, getPaletteById, isCssVariableName, parseColorThemeFile, serializeColorThemeFile, saveColorThemeSettings, THEME_COLOR_NAMES } from './colorTheme';
 import { clearDebugLogEntries, configureDebugLog, getDebugLogEntries } from './debugLog';
-import { findFileInWorkspaces, state } from './state';
-import { applyAppColorTheme, documentSessions, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
+import { findFileInWorkspaces, siteSetupFields, state } from './state';
+import { applyAppColorTheme, handlers, documentSessions, selectDocumentTab, refreshMcpClientInstallStatus, mountCurrentDocument, mountRoot, openHomepage, preserveCurrentDocumentSession, rerender, refreshDebugLogModal, runBusy, closeUiBeforeAiSettings, closeUiBeforeAbout, closeUiBeforeAppSettings, closeUiBeforeColorTheme, closeUiBeforeMcpSettings, persistAndApplyColorTheme, updateThemeRowChrome, currentThemeDisplayName, themeSuggestedFileName, cloneAiSettings, cloneAppSettings, cloneMcpSettings, aiSettingsChanged, appSettingsChanged, mcpSettingsChanged, copyMcpConnectionUrl, copyMcpBearerToken, copyMcpSetupValue, canonicalAiSettings, canonicalAppSettings, setDocumentDirty, upsertWorkspace, workspaceFilterDocumentCache, writeDocumentColorPreference } from './main';
 import type { UiHandlers } from './ui';
 import { refreshInstalledPlugins } from './pluginManager';
+import { adoptIntoSiteSetup, editingSetupItemPage, endSiteSetup, openSetupTestValue, runSiteSetupStep, showSetupTestMatching, toggleSiteSetupRowKey, type SiteSetupStep } from './siteSetupSession';
 import { controlIntegrationBrowser, isIntegrationBrowserOpen, openIntegrationBrowser, openIntegrationPage, runIntegrationStorageProbe } from './integrationBrowser';
+import { BrowserRequestCancelledError, IntegrationBrowserClosedError, requestFromBrowser } from './browserRequests';
 import { listDocumentKeyMetadata, loadDocumentKeyVaultStatus, loadIntegrationVaultStatus, resetIntegrationVault } from './backend';
 import { openDocumentKeyFileDialog } from './backend';
 import { documentEncryptionKeyring, ensureDocumentKeysLoaded, extractEncryptionKeyIds, importReviewedDocumentKeys, parseDocumentKeyFiles, permanentlyDeleteDocumentKey, preserveStoredDocumentKey, reloadDocumentKeys, renameStoredDocumentKey, reviewDocumentKeyImports, serializeDocumentKeyFile } from './documentKeys';
 import { migrateVisualDocumentKeyId, migrateWorkspaceDocumentKeyId } from './documentKeyMigration';
 import { serializeHvy, type VisualDocument } from './hvy';
 import { workspaceDocumentKeyUsage } from './documentKeyUsage';
-import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, integrationNavigationResumeUrl, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
+import { actionPatternPayload, commandExecutionPayload, createCustomPageIntegration, createIntegrationProfile, defaultIntegrationPageReadyChecks, integrationPageExpectedOrigins, integrationPageReadyChecks, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, saveIntegrationRegistry, type IntegrationActionDefinition, type IntegrationPageReadinessResult, type IntegrationPageReadyChecks, type IntegrationRetrievalSourceDefinition } from './integrationRegistry';
 import { approvalMatchesDescriptor, approveIntegrationWebMcpTool, beginIntegrationWebMcpScan, webMcpCapabilityId, webMcpToolsForContext } from './integrationWebMcp';
 import { assertLiveWebMcpDescriptor, discoverIntegrationWebMcpTools, invokeIntegrationWebMcpTool } from './integrationWebMcpRuntime';
 import { analyzeWebMcpStructuredData, webMcpExtractionRecords, webMcpRecordSetAtPath } from './integrationWebMcpStructuredData';
@@ -35,6 +41,14 @@ async function openDocumentNamesUsingKey(keyId: string): Promise<string[]> {
   return [...new Set(names)];
 }
 
+/** How long the Integrations manager waits for the page to answer a background request, as the web capability runtime does. */
+const INTEGRATION_PAGE_REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * The Integrations manager's requests of its page (a preview, a check of the saved examples, a ready check test): closing
+ * the manager cancels the ones still waiting, as no one is left to see their answer. Collection runs are not among them.
+ */
+let integrationPageRequests = new AbortController();
+
 function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'): string {
   if (destination === 'msn') return 'MSN image test';
   return destination === 'gmail' ? 'Gmail' : 'Google Calendar';
@@ -43,6 +57,28 @@ function integrationDestinationLabel(destination: 'msn' | 'gmail' | 'calendar'):
 function integrationCommandInputId(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
+
+/** The name a site setup's next page command is saved under. */
+export const PAGINATION_COMMAND_NAMES = { next: 'Next page', 'page-number': 'Page numbers' } as const;
+
+/**
+ * What the browser asks when a site setup configures its pagination: which way the list goes to its next page, then
+ * one click on it, with no interaction to choose.
+ */
+const PAGINATION_PICK = {
+  question: 'How does this list go to its next page?',
+  choices: [
+    { pagination: 'next', label: 'Next link or button', gesture: 'click', prompt: 'Select the Next link or button.', confirm: 'Found it. Galaxy will click this to go to the next page.' },
+    {
+      pagination: 'page-number',
+      label: 'Page numbers',
+      gesture: 'click',
+      pageNumber: true,
+      prompt: 'Select one of the page numbers, such as 2.',
+      confirm: 'Found it. On each page, Galaxy will click the number of the page after it.',
+    },
+  ],
+};
 
 async function persistAiSettings(settings: AiSettings): Promise<void> {
   state.aiSettings = await saveAiSettings(settings);
@@ -185,6 +221,90 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, payload, foreground, profile.name, integrationId, page.id);
     }
   };
+  /**
+   * Asks the integration page for something it answers (a preview, its structured data sources, a ready check test),
+   * as the web capability runtime does: the answer comes back with the request's id, and closing the browser, or no
+   * answer in time, fails it. `send` puts the id in the request's context.
+   */
+  const requestFromIntegrationPage = (profileId: string, kinds: string[], send: (requestId: string) => Promise<unknown>) =>
+    requestFromBrowser<Record<string, unknown>>({
+      profileId,
+      accepts: (result) => kinds.includes(String(result.kind)),
+      answer: (result) => result,
+      timeoutMs: INTEGRATION_PAGE_REQUEST_TIMEOUT_MS,
+      timeoutMessage: 'The page didn’t answer in time.',
+      signal: integrationPageRequests.signal,
+    }, send);
+  /**
+   * Why a request of the page failed: closing the browser or the manager isn't an error, only the end of what was waiting
+   * on it. During a site setup, it is said in the setup, where it happened, not under the manager (where it would only be
+   * seen once the setup is done).
+   */
+  const integrationPageRequestFailed = (error: unknown, status: string): string | null => {
+    if (error instanceof IntegrationBrowserClosedError) {
+      state.status = 'Integration browser closed';
+      return null;
+    }
+    if (error instanceof BrowserRequestCancelledError) return null;
+    state.status = status;
+    const message = error instanceof Error ? error.message : String(error);
+    if (state.siteSetup) {
+      state.siteSetup.error = message;
+      return null;
+    }
+    return message;
+  };
+  /** Runs a record type's extraction on its page (opening it if the browser is closed) and waits for the records. */
+  const extractOnIntegrationActionPage = (extraction: { context: Record<string, unknown> } & Record<string, unknown>) =>
+    requestFromIntegrationPage(state.selectedIntegrationProfileId, ['integration-extraction'], async (requestId) => {
+      const request = { ...extraction, context: { ...extraction.context, browserRequestId: requestId } };
+      if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
+        await reopenIntegrationActionPage(request, false);
+        return;
+      }
+      try {
+        await controlIntegrationBrowser('extract-pattern', state.selectedIntegrationProfileId, request);
+      } catch (error) {
+        if (!integrationBrowserUnavailable(error)) throw error;
+        await reopenIntegrationActionPage(request, false);
+      }
+    });
+  /**
+   * What the page must be before it is read: as its ready checks say; but a site setup's page stands for every page
+   * like it (any job's page, the list as it is now), so any page on its site.
+   */
+  const pageReadyChecks = (page: Parameters<typeof integrationPageReadyChecks>[0] & { id: string }) => (state.integrationRegistry.integrations.some((integration) => integration.siteSetup && integration.pages.some((candidate) => candidate.id === page.id))
+    ? defaultIntegrationPageReadyChecks(page.url, 'strict-domain')
+    : integrationPageReadyChecks(page));
+  /** The site setup's list page, in the Integrations manager while it is set up. */
+  const siteSetupListPage = () => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.siteSetup?.listIntegrationId);
+    const page = integration?.pages[0];
+    return integration && page ? { integration, page } : null;
+  };
+  /**
+   * Picking on a site setup's list page starts with the list where runs read it (`prepareList`, which the inspector's
+   * start takes first): its steps taken unless its ready checks pass already, as a run does. Not while the steps
+   * themselves are recorded, which start from the list as it loads.
+   */
+  const withListPrepared = <T,>(pageId: string, options: T): T => {
+    const listPage = siteSetupListPage();
+    const command = listPage?.page.id === pageId ? listPage.page.commands?.find((candidate) => candidate.prepare) : undefined;
+    if (!listPage || !command || state.integrationCommandDraftPrepare || !options || typeof options !== 'object') return options;
+    return { ...options, prepareList: { command, checks: { urlMode: 'strict-domain', urlValue: new URL(listPage.page.url).hostname, elements: listPage.page.readyChecks?.elements ?? [] } } };
+  };
+  /** What every extraction's answer carries: the confidence it used, and whether the page was ready (said when not). */
+  const integrationActionPageReady = (result: Record<string, unknown>): boolean => {
+    if (result.status === 'not-ready') {
+      state.integrationActionFetchError = typeof result.message === 'string' ? result.message : 'The expected page is not ready.';
+      state.status = 'Page is not ready';
+      void controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+      return false;
+    }
+    state.integrationActionFetchError = null;
+    if (typeof result.minimumConfidence === 'number') state.integrationActionMinimumConfidence = Math.max(0.5, Math.min(0.95, result.minimumConfidence));
+    return true;
+  };
   const integrationPageContext = (integrationId: string, pageId: string) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
@@ -245,6 +365,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const selected = (value as { selected?: unknown }).selected;
     if (!selected || typeof selected !== 'object') return '';
     const record = selected as Record<string, unknown>;
+    // A form control's state (its text, whether it is checked, its choice), as the page checks it; else what it shows.
+    if (typeof record.controlState === 'string') return record.controlState;
     for (const key of ['descendantText', 'directText', 'accessibleName']) {
       if (typeof record[key] === 'string' && record[key].trim()) return record[key].trim();
     }
@@ -255,10 +377,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       ? JSON.stringify({ imageUrl: imageRecord.url, alt: typeof imageRecord.alt === 'string' ? imageRecord.alt : null })
       : '';
   };
-  const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', options: unknown) => {
+  // With `openPage`, the record type's page is opened to pick on, and picking starts once it has loaded (or at once, when
+  // it is showing already): picking started while the browser is still on another page would stay on that one.
+  const startIntegrationActionInspection = async (inspectionKind: 'parent' | 'target', pickOptions: unknown, openPage = false) => {
     const command = inspectionKind === 'parent' ? 'inspect-parent' : 'inspect-target';
+    const options = withListPrepared(state.integrationActionDraftPageId ?? '', pickOptions);
     const reopen = () => reopenIntegrationActionPage({ kind: 'command-target', inspectionKind, options }, true);
-    if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
+    if (openPage || !await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
       await reopen();
       return;
     }
@@ -278,7 +403,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
       if (!integration || !action || !command || !payload || !page) throw new Error('The saved command is incomplete.');
       void runBusy(`Running ${command.name}...`, async () => {
-        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, { ...payload, readyChecks: integrationPageReadyChecks(page) });
+        await controlIntegrationBrowser('execute-command', state.selectedIntegrationProfileId, { ...payload, readyChecks: pageReadyChecks(page) });
         state.status = `Ran ${command.name}`;
       }, { preserveMountedDocument: true });
       return;
@@ -289,7 +414,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!integration || !page || !command || !payload || !profile) throw new Error('The saved page command is incomplete.');
     void runBusy(`Running ${command.name}...`, async () => {
-      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: integrationPageReadyChecks(page) } };
+      const pendingExecution = { kind: 'command-execution', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, payload: { ...payload, readyChecks: pageReadyChecks(page) } };
       if (page.id === 'gmail' || page.id === 'google-calendar') await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name);
       else await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingExecution, true, profile.name, integration.id, page.id);
       state.status = `Ran ${command.name}`;
@@ -307,13 +432,16 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       commandRecorder: {
         scope: state.integrationCommandDraftScope,
         ...(pattern ? { pattern } : {}),
+        ...(state.integrationCommandDraftPagination ? { pick: PAGINATION_PICK } : {}),
+        // A site setup's steps to its list keep what is typed and chosen, and ask nothing each run.
+        ...(state.integrationCommandDraftPrepare ? { keepValues: true } : {}),
       },
     };
     const pendingSelection = {
       kind: 'command-target',
       context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) },
       inspectionKind: state.integrationCommandDraftScope === 'record' ? 'parent' : 'target',
-      options,
+      options: withListPrepared(page.id, options),
     };
     state.integrationCommandSelectionPending = true;
     void runBusy(`Opening ${page.name} to record the command...`, async () => {
@@ -404,7 +532,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       integrationId: integration.id,
       name,
       description: state.integrationActionDraftDescription.trim(),
-      pageIds: [state.integrationActionDraftPageId],
+      // The pages it was picked on: one more when an example is added on another page (one a run couldn't read).
+      pageIds: [...new Set([...(existing?.pageIds ?? []), state.integrationActionDraftPageId])],
       script: 'structural-pattern-v1',
       resultSchema: {
         type: 'array',
@@ -420,6 +549,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         ...(state.integrationActionScope ? { scope: matcherSnapshot(state.integrationActionScope) } : {}),
         parents: state.integrationActionAnchors.map(matcherSnapshot),
         fields,
+        // What opens a row's item is picked in its own step, not here: kept as it was.
+        ...(existing?.pattern?.opener ? { opener: existing.pattern.opener } : {}),
       },
     };
     if (existingIndex >= 0) integration.actions[existingIndex] = recordType;
@@ -669,13 +800,23 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationStructuredSourceError = null;
     state.integrationStructuredSourcePageId = pageId;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Looking for structured data sources on ${page.name}...`, async () => {
-      const context = { integrationId, pageId };
+    state.status = `Looking for structured data sources on ${page.name}...`;
+    rerender({ preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-source-discovery'], async (requestId) => {
+      const context = { integrationId, pageId, browserRequestId: requestId };
       if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('discover-sources', profile.id, context);
       else await openPageForStructuredSource(page, profile, { kind: 'source-discovery', context });
-    }, { preserveMountedDocument: true }).catch((error) => {
+    }).then(async (result) => {
+      state.integrationStructuredSourceError = null;
+      state.integrationStructuredSources = (result.sources as typeof state.integrationStructuredSources | undefined) ?? [];
+      state.status = state.integrationStructuredSources.length
+        ? `Found ${state.integrationStructuredSources.length} structured data source${state.integrationStructuredSources.length === 1 ? '' : 's'}`
+        : 'No structured data sources found';
+      await controlIntegrationBrowser('focus-main', profile.id);
+    }, (error: unknown) => {
+      state.integrationStructuredSourceError = integrationPageRequestFailed(error, 'Looking for structured data sources failed');
+    }).finally(() => {
       state.integrationStructuredSourcePending = false;
-      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
       rerender({ preserveMountedDocument: true });
     });
   },
@@ -701,14 +842,29 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationStructuredSourcePending = true;
     state.integrationStructuredSourceError = null;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Fetching ${source.name}...`, async () => {
+    state.status = `Fetching ${source.name}...`;
+    rerender({ preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-structured-result', 'integration-structured-error'], async (requestId) => {
       const request = { kind: source.kind, url: source.url };
-      const context = { integrationId, pageId, sourceId, sourceName: source.name };
+      const context = { integrationId, pageId, sourceId, sourceName: source.name, browserRequestId: requestId };
       if (await isIntegrationBrowserOpen(profile.id)) await controlIntegrationBrowser('fetch-source', profile.id, { source: request, context });
       else await openPageForStructuredSource(page, profile, { kind: 'source-fetch', source: request, context });
-    }, { preserveMountedDocument: true }).catch((error) => {
+    }).then(async (result) => {
+      if (result.kind === 'integration-structured-error') {
+        state.integrationStructuredSourceError = String(result.message ?? 'The structured source could not be fetched.');
+        state.status = 'Structured data fetch failed';
+      } else {
+        state.integrationStructuredSourceError = null;
+        state.integrationStructuredResultName = source.name;
+        state.integrationStructuredResult = result.value;
+        state.integrationStructuredResultOpen = true;
+        state.status = `Fetched ${source.name}`;
+      }
+      await controlIntegrationBrowser('focus-main', profile.id);
+    }, (error: unknown) => {
+      state.integrationStructuredSourceError = integrationPageRequestFailed(error, 'Structured data fetch failed');
+    }).finally(() => {
       state.integrationStructuredSourcePending = false;
-      state.integrationStructuredSourceError = error instanceof Error ? error.message : String(error);
       rerender({ preserveMountedDocument: true });
     });
   },
@@ -979,7 +1135,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = 'Ready';
     }, { preserveMountedDocument: true });
   },
+  siteSetupStep: (step) => runSiteSetupStep(step as SiteSetupStep),
+  siteSetupRowKey: (fieldId) => toggleSiteSetupRowKey(fieldId),
+  openSiteSetupTestValue: (opened) => openSetupTestValue(opened),
+  showSiteSetupTestMatching: (result) => showSetupTestMatching(result),
   closeIntegrations: () => {
+    integrationPageRequests.abort(new BrowserRequestCancelledError());
+    integrationPageRequests = new AbortController();
+    endSiteSetup();
     state.integrationsDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
@@ -996,7 +1159,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   addIntegrationPage: (name, url) => {
     try {
-      const integration = createCustomPageIntegration(name, url);
+      const integration = adoptIntoSiteSetup(createCustomPageIntegration(name, url));
       state.integrationRegistry = {
         ...state.integrationRegistry,
         integrations: [...state.integrationRegistry.integrations, integration],
@@ -1101,14 +1264,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.selectedIntegrationProfileId = profile.id;
     if (page.id === 'gmail' || page.id === 'google-calendar') {
       const destination = page.id === 'gmail' ? 'gmail' : 'calendar';
-      void runBusy(`Opening ${page.name}...`, async () => {
+      return runBusy(`Opening ${page.name}...`, async () => {
         await openIntegrationBrowser(destination, profile.id, profile.browserStoreId, false, undefined, true, profile.name);
         state.integrationVaultStatus = await loadIntegrationVaultStatus();
         state.status = `Opened ${page.name}`;
       }, { preserveMountedDocument: true });
-      return;
     }
-    void runBusy(`Opening ${page.name}...`, async () => {
+    return runBusy(`Opening ${page.name}...`, async () => {
       await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
       state.integrationVaultStatus = await loadIntegrationVaultStatus();
       state.status = `Opened ${page.name}`;
@@ -1161,7 +1323,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       kind: 'command-target',
       context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(pageWithOrigins) },
       inspectionKind: 'target',
-      options,
+      options: withListPrepared(page.id, options),
     };
     state.integrationReadyCheckSelectionPending = true;
     state.integrationReadyCheckValidationResult = null;
@@ -1177,6 +1339,25 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }, { preserveMountedDocument: true });
   },
   completeIntegrationReadyCheck: (value) => {
+    // Picked for a site setup's list (Get to the list): a ready check of the list page, named for what was picked, and
+    // back to its window.
+    const listPage = siteSetupListPage();
+    if (state.siteSetup?.prepare.open && listPage && value && typeof value === 'object') {
+      const selected = ((value as { selected?: unknown }).selected ?? {}) as Record<string, unknown>;
+      const elements = listPage.page.readyChecks?.elements ?? [];
+      const named = [selected.accessibleName, selected.directText].find((text): text is string => typeof text === 'string' && Boolean(text.trim()));
+      const content = selectedReadyCheckValue(value);
+      listPage.page.readyChecks = {
+        ...integrationPageReadyChecks(listPage.page),
+        elements: [...elements, { id: crypto.randomUUID(), name: named?.trim().slice(0, 60) || `Ready check ${elements.length + 1}`, snapshot: matcherSnapshot(value), ...(content ? { expectedValue: content } : {}) }],
+      };
+      saveIntegrationRegistry(state.integrationRegistry);
+      state.integrationReadyCheckSelectionPending = false;
+      state.siteSetup.prepare.test = null;
+      state.status = 'Added ready check';
+      rerender({ preserveMountedDocument: true });
+      return;
+    }
     const draft = state.integrationReadyChecksDraft;
     if (!draft || !value || typeof value !== 'object') return;
     const content = selectedReadyCheckValue(value);
@@ -1208,20 +1389,20 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       expectedOrigin: new URL(page.url).origin,
       expectedOrigins: integrationPageExpectedOrigins(pageWithDraft),
     };
-    const validation = { kind: 'ready-check-validation', context, payload: { readyChecks: structuredClone(draft) } };
     const targetUrl = draft.urlMode === 'strict-url' ? draft.urlValue : page.url;
     state.integrationReadyCheckValidationPending = true;
     state.integrationReadyCheckValidationResult = null;
+    state.status = `Reloading ${page.name} and testing ready checks...`;
     rerender({ preserveMountedDocument: true });
-    void runBusy(`Reloading ${page.name} and testing ready checks...`, async () => {
-      try {
-        await openIntegrationDefinitionPage(pageWithDraft, profile, validation, true, targetUrl);
-      } catch (error) {
-        state.integrationReadyCheckValidationPending = false;
-        throw error;
-      }
-      state.status = `Testing ${page.name} ready checks`;
-    }, { preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-ready-check-validation'], async (requestId) => {
+      const validation = { kind: 'ready-check-validation', context: { ...context, browserRequestId: requestId }, payload: { readyChecks: structuredClone(draft) } };
+      await openIntegrationDefinitionPage(pageWithDraft, profile, validation, true, targetUrl);
+    }).then((result) => handlers.completeIntegrationReadyCheckValidation(result), (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, 'Testing ready checks failed');
+    }).finally(() => {
+      state.integrationReadyCheckValidationPending = false;
+      rerender({ preserveMountedDocument: true });
+    });
   },
   completeIntegrationReadyCheckValidation: (value) => {
     if (!value || typeof value !== 'object') return;
@@ -1286,7 +1467,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       pageId: page.id,
       requestedUrl,
       currentUrl,
-      navigationKind: request.navigationKind === 'frame-or-main' || request.navigationKind === 'new-window' || request.navigationKind === 'address'
+      navigationKind: request.navigationKind === 'new-window' || request.navigationKind === 'address'
         ? request.navigationKind
         : 'main-frame',
     };
@@ -1311,10 +1492,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationNavigationRequest = null;
     state.status = `Allowed navigation to ${new URL(request.requestedUrl).origin}`;
     rerender({ preserveMountedDocument: true });
-    const resumeUrl = integrationNavigationResumeUrl(request.navigationKind, request.currentUrl, request.requestedUrl);
     void runBusy(`Allowing navigation to ${new URL(request.requestedUrl).origin}...`, async () => {
-      await openIntegrationPage(resumeUrl, allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
-      if (request.navigationKind === 'frame-or-main') await controlIntegrationBrowser('reload', profile.id);
+      await openIntegrationPage(request.requestedUrl, allowedOrigins, profile.id, profile.browserStoreId, false, undefined, true, profile.name, integration.id, page.id);
     }, { preserveMountedDocument: true });
   },
   rejectIntegrationNavigation: () => {
@@ -1425,10 +1604,11 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   addActionForIntegrationPage: (integrationId, pageId) => {
     startWebPageRecordType(integrationId, pageId);
   },
-  editIntegrationAction: (integrationId, actionId) => {
+  editIntegrationAction: (integrationId, actionId, example) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const action = integration?.actions.find((candidate) => candidate.id === actionId);
-    const page = integration?.pages.find((candidate) => candidate.id === action?.pageIds[0]);
+    // Adding an example on another page (one a run couldn't read) edits on that page, and picks its fields once it is open.
+    const page = integration?.pages.find((candidate) => candidate.id === (example?.pageId ?? action?.pageIds[0]));
     const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
     if (!integration || !action?.pattern || !page || !profile) throw new Error('The record type was not found.');
     const parents = [...action.pattern.parents];
@@ -1476,27 +1656,39 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.inspectionPrivacyRules = [];
     state.status = `Editing ${action.name}`;
     rerender({ preserveMountedDocument: true });
-    void (async () => {
+    // The page opens behind the builder, and checks the saved examples against it once loaded: as the page shows them,
+    // without scrolling through it as a run does (an example off screen has no live fit), so adding an example starts
+    // where the page is.
+    void requestFromIntegrationPage(profile.id, ['integration-extraction'], async (requestId) => {
+      const liveExampleExtraction = {
+        pattern: { ...actionPatternPayload(action), scrollPage: false },
+        context: { mode: 'examples', actionId: action.id, browserRequestId: requestId, expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: pageReadyChecks(page) },
+        foreground: false,
+      };
       try {
-        const liveExampleExtraction = {
-          pattern: { ...actionPatternPayload(action), scrollPage: action.scrollPage !== false },
-          context: { mode: 'examples', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
-          foreground: false,
-        };
         if (page.id === 'gmail' || page.id === 'google-calendar') {
           await openIntegrationBrowser(page.id === 'gmail' ? 'gmail' : 'calendar', profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name);
         } else {
           await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, liveExampleExtraction, false, profile.name, integration.id, page.id);
         }
-        state.integrationActionEditPageLoading = false;
         state.status = `Ready to edit ${action.name}`;
-        rerender({ preserveMountedDocument: true });
-      } catch (error) {
+      } finally {
         state.integrationActionEditPageLoading = false;
-        state.error = error instanceof Error ? error.message : String(error);
         rerender({ preserveMountedDocument: true });
       }
-    })();
+    }).then((result) => {
+      if (!integrationActionPageReady(result)) return;
+      state.integrationActionLiveExampleRecords = (result.records as unknown[] | undefined) ?? [];
+      state.status = `Validated ${state.integrationActionLiveExampleRecords.filter(Boolean).length} live examples`;
+    }, (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, `Couldn’t check ${action.name}’s examples`);
+      return error;
+    }).then((error) => {
+      rerender({ preserveMountedDocument: true });
+      // Once the saved examples were checked against it (in the page, as it loads): picking the new one starts there,
+      // unless the manager was closed meanwhile.
+      if (example && !(error instanceof BrowserRequestCancelledError)) handlers.pickIntegrationRecordFields();
+    });
   },
   closeIntegrationActionBuilder: () => {
     if (state.integrationActionSelectionPending) {
@@ -1542,7 +1734,38 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       state.status = fieldIndex === null ? 'Select fields inside the parent, then choose Done' : 'Select replacement data inside the parent';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
   },
-  addIntegrationActionAnchor: () => {
+  // A range field's start or end picked again in one example, keeping the other boundary.
+  changeIntegrationActionRange: (parentIndex, fieldIndex, boundary) => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'define';
+    state.integrationActionSelectionKind = 'range';
+    state.integrationActionRangeBoundary = boundary;
+    state.integrationActionTargetSelectionParentIndex = parentIndex;
+    state.integrationActionTargetSelectionFieldIndex = fieldIndex;
+    state.integrationActionSelectedParentIndex = parentIndex;
+    state.integrationActionSelectionPending = true;
+    void runBusy(`Starting to pick where the range ${boundary === 'end' ? 'ends' : 'starts'}...`, async () => {
+      const parentSnapshot = state.integrationActionAnchors[parentIndex];
+      const parentCssPath = (parentSnapshot as { selected?: { cssPath?: string } } | undefined)?.selected?.cssPath;
+      const snapshot = state.integrationActionTargetVariants[fieldIndex]?.[parentIndex];
+      await startIntegrationActionInspection('target', { parentCssPath, parentSnapshot, multiSelect: false, rangeEdit: { boundary, snapshot } });
+      state.status = `Select where the range ${boundary === 'end' ? 'ends' : 'starts'}`;
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  // The record type builder's Add example. A site setup's item page: another example is another item, picked from the
+  // list and opened as a run opens it, as Pick another does. What was changed here (an example removed) is saved first,
+  // so it isn't lost.
+  addIntegrationActionExample: () => {
+    if (!editingSetupItemPage()) {
+      handlers.addIntegrationActionAnchor();
+      return;
+    }
+    if (integrationActionDraftJson() !== state.integrationActionBuilderInitialJson) persistIntegrationAction();
+    else state.integrationActionBuilderOpen = false;
+    runSiteSetupStep('item-page');
+    rerender({ preserveMountedDocument: true });
+  },
+  addIntegrationActionAnchor: (open) => {
     const selectingFirstExample = state.integrationActionAnchors.length === 0;
     state.integrationActionBuilderOpen = true;
     state.integrationActionBuilderStep = 'define';
@@ -1560,10 +1783,40 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       const existingPattern = targets.length
         ? { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets }
         : null;
-      const options = { existingPattern, ...(state.integrationActionScope ? { selectionScope: state.integrationActionScope, minimumConfidence: state.integrationActionMinimumConfidence } : {}) };
-      await startIntegrationActionInspection('parent', options);
+      // A site setup says what the first example's box is ("the box around one job in the list").
+      const prompt = !existingPattern ? state.siteSetup?.prompts?.box : undefined;
+      const options = { existingPattern, ...(prompt ? { prompt } : {}), ...(state.integrationActionScope ? { selectionScope: state.integrationActionScope, minimumConfidence: state.integrationActionMinimumConfidence } : {}) };
+      await startIntegrationActionInspection('parent', options, open?.openPage);
       state.status = selectingFirstExample ? 'Select one complete example record' : 'Select another parent containing the same kind of data';
     }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  // A page with one record: its fields are picked first, and the browser takes the box around them as the record's.
+  pickIntegrationRecordFields: (open) => {
+    state.integrationActionBuilderOpen = true;
+    state.integrationActionBuilderStep = 'define';
+    state.integrationActionSelectionKind = 'target';
+    state.integrationActionSelectionPending = true;
+    state.integrationActionTargetSelectionParentIndex = state.integrationActionAnchors.length;
+    state.integrationActionTargetSelectionFieldIndex = null;
+    const prompt = state.siteSetup?.prompts?.fields;
+    const fieldChoices = siteSetupFields();
+    // A site setup's item just opened from the list: Wrong page takes it back.
+    const wrongPage = state.siteSetup?.offerWrongPage === true;
+    if (state.siteSetup) state.siteSetup.offerWrongPage = false;
+    void runBusy('Starting field selection...', async () => {
+      await startIntegrationActionInspection('target', { multiSelect: true, deriveParent: true, ...(prompt ? { prompt } : {}), ...(fieldChoices ? { fieldChoices } : {}), ...(wrongPage ? { wrongPage: true } : {}) }, open?.openPage);
+      state.status = 'Select the fields to read';
+    }, { preserveMountedDocument: true }).then(() => controlIntegrationBrowser('focus-browser', state.selectedIntegrationProfileId));
+  },
+  inspectIntegrationPage: (integrationId, pageId, inspectionKind, options) => {
+    const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
+    const page = integration?.pages.find((candidate) => candidate.id === pageId);
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!integration || !page || !profile) throw new Error('The integration page was not found.');
+    const pendingSelection = { kind: 'command-target', context: { expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page) }, inspectionKind, options: withListPrepared(page.id, options) };
+    return runBusy(`Opening ${page.name}...`, async () => {
+      await openIntegrationPage(page.url, page.allowedOrigins, profile.id, profile.browserStoreId, false, pendingSelection, true, profile.name, integration.id, page.id);
+    }, { preserveMountedDocument: true });
   },
   limitIntegrationActionToSection: () => {
     const parentSnapshot = state.integrationActionAnchors[0];
@@ -1680,7 +1933,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
   },
   testIntegrationActionPattern: () => {
     const targets = state.integrationActionExamples.map((snapshot, index) => ({ label: state.integrationActionTargetLabels[index] || `Target ${index + 1}`, cardinality: state.integrationActionTargetCardinalities[index] ?? 'single', optional: state.integrationActionTargetOptional[index] ?? true, snapshot, snapshots: (state.integrationActionTargetVariants[index] ?? [snapshot]).filter(Boolean), negativeSnapshots: (state.integrationActionTargetNegativeVariants[index] ?? []).filter(Boolean) }));
-    const pattern = { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets };
+    const pattern = withListPrepared(integrationActionPageContext().page.id, { minimumConfidence: state.integrationActionMinimumConfidence, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets });
     void (async () => {
       if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
         await reopenIntegrationActionPage({ kind: 'pattern-highlight', pattern }, true);
@@ -1712,31 +1965,43 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }));
     state.integrationActionPreviewDiagnostics = null;
     state.integrationActionPreviewPending = true;
+    state.integrationActionFetchError = null;
     state.integrationActionBuilderOpen = true;
     state.status = 'Reviewing extraction in the background...';
     rerender({ preserveMountedDocument: true });
     const extraction = {
       pattern: { minimumConfidence: state.integrationActionMinimumConfidence, scrollPage: state.integrationActionScrollPage, ...(state.integrationActionScope ? { scope: state.integrationActionScope } : {}), parents: state.integrationActionAnchors, targets },
-      context: { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: integrationPageReadyChecks(page) },
+      context: withListPrepared(page.id, { mode: 'builder', expectedOrigin: new URL(page.url).origin, expectedOrigins: integrationPageExpectedOrigins(page), readyChecks: pageReadyChecks(page) }),
       foreground: false,
     };
-    void (async () => {
-      if (!await isIntegrationBrowserOpen(state.selectedIntegrationProfileId)) {
-        await reopenIntegrationActionPage(extraction, false);
-        return;
+    void extractOnIntegrationActionPage(extraction).then(async (result) => {
+      if (!integrationActionPageReady(result)) return;
+      state.integrationActionPreviewRecords = (result.records as unknown[] | undefined) ?? [];
+      state.integrationActionPreviewDiagnostics = result.diagnostics ?? null;
+      state.integrationActionPreviewStoppedEarly = result.stoppedEarly === true;
+      state.integrationActionBuilderStep = 'preview';
+      state.integrationActionBuilderOpen = true;
+      state.status = `Extracted ${state.integrationActionPreviewRecords.length} matching items`;
+      rerender({ preserveMountedDocument: true });
+      await controlIntegrationBrowser('focus-main', state.selectedIntegrationProfileId);
+    }, (error: unknown) => {
+      state.error = integrationPageRequestFailed(error, 'Review extraction failed');
+      // Said in the builder, where Preview was pressed: a site setup's dialog, where a setup's errors go, is behind it.
+      // Stopped (Stop) or closed, nothing went wrong.
+      if (!(error instanceof IntegrationBrowserClosedError) && !(error instanceof BrowserRequestCancelledError)) {
+        state.integrationActionFetchError = error instanceof Error ? error.message : String(error);
       }
-      try {
-        await controlIntegrationBrowser('extract-pattern', state.selectedIntegrationProfileId, extraction);
-      } catch (error) {
-        if (!integrationBrowserUnavailable(error)) throw error;
-        await reopenIntegrationActionPage(extraction, false);
-      }
-    })().catch((error) => {
-        state.integrationActionPreviewPending = false;
-        state.error = error instanceof Error ? error.message : String(error);
-        state.status = 'Review extraction failed';
-        rerender({ preserveMountedDocument: true });
-      });
+    }).finally(() => {
+      state.integrationActionPreviewPending = false;
+      rerender({ preserveMountedDocument: true });
+    });
+  },
+  // Stop, while Preview reads the page: the page stops, and the builder stops waiting for it.
+  stopIntegrationActionPreview: () => {
+    void controlIntegrationBrowser('cancel-extraction', state.selectedIntegrationProfileId).catch(() => undefined);
+    integrationPageRequests.abort(new BrowserRequestCancelledError());
+    integrationPageRequests = new AbortController();
+    state.status = 'Preview stopped';
   },
   continueIntegrationActionBuilder: () => {
     state.integrationActionBuilderStep = 'save';
@@ -1817,10 +2082,12 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftPageId = action.pageIds[0] ?? null;
     state.integrationCommandDraftScope = 'record';
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
+    state.integrationCommandDraftPrepare = false;
     rerender({ preserveMountedDocument: true });
     startIntegrationCommandRecording();
   },
-  addCommandForIntegrationPage: (integrationId, pageId) => {
+  addCommandForIntegrationPage: (integrationId, pageId, purpose) => {
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === integrationId);
     const page = integration?.pages.find((candidate) => candidate.id === pageId);
     if (!integration || !page) throw new Error('The page was not found.');
@@ -1831,6 +2098,8 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandDraftPageId = pageId;
     state.integrationCommandDraftScope = 'page';
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = purpose === 'pagination';
+    state.integrationCommandDraftPrepare = purpose === 'prepare';
     rerender({ preserveMountedDocument: true });
     startIntegrationCommandRecording();
   },
@@ -1839,9 +2108,84 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandSelectionPending = false;
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
+    state.integrationCommandDraftPrepare = false;
     rerender({ preserveMountedDocument: true });
   },
-  saveIntegrationCommand: (name, inputNames) => {
+  // UI: site setup, Get to the list: its window opened or closed.
+  openSiteSetupPrepare: (open) => {
+    if (!state.siteSetup) return;
+    state.siteSetup.prepare = { open, test: null };
+    rerender({ preserveMountedDocument: true });
+  },
+  // UI: Get to the list window, Record steps, Add ready check, or Test.
+  siteSetupPrepareStep: (step) => {
+    const listPage = siteSetupListPage();
+    if (!state.siteSetup || !listPage) return;
+    const { integration, page } = listPage;
+    if (step === 'record') {
+      handlers.addCommandForIntegrationPage(integration.id, page.id, 'prepare');
+      return;
+    }
+    if (step === 'add-check') {
+      const checks = integrationPageReadyChecks(page);
+      state.integrationReadyChecksIntegrationId = integration.id;
+      state.integrationReadyChecksPageId = page.id;
+      state.integrationReadyChecksDraft = structuredClone(checks);
+      state.integrationAllowedOriginsDraft = page.allowedOrigins.join('\n');
+      handlers.requestIntegrationReadyCheck(integration.id, page.id, checks.urlMode, checks.urlValue, state.integrationAllowedOriginsDraft, Object.fromEntries(checks.elements.map((check) => [check.id, check.expectedValue ?? ''])));
+      return;
+    }
+    // Test, as a run gets there: the list loaded fresh, its steps taken, then each ready check, on its site.
+    const profile = state.integrationRegistry.profiles.find((candidate) => candidate.id === state.selectedIntegrationProfileId);
+    if (!profile) throw new Error('Choose a browser profile first.');
+    const prepare = page.commands?.find((command) => command.prepare);
+    const checks = { urlMode: 'strict-domain' as const, urlValue: new URL(page.url).hostname, elements: page.readyChecks?.elements ?? [] };
+    const setup = state.siteSetup;
+    setup.prepare.test = { pending: 'Loading the list fresh, taking the steps, then checking…', result: null, problem: null };
+    rerender({ preserveMountedDocument: true });
+    void requestFromIntegrationPage(profile.id, ['integration-ready-check-validation'], async (requestId) => {
+      const context = {
+        mode: 'ready-check-validation',
+        integrationId: integration.id,
+        pageId: page.id,
+        expectedOrigin: new URL(page.url).origin,
+        expectedOrigins: integrationPageExpectedOrigins(page),
+        browserRequestId: requestId,
+        ...(prepare ? { prepareCommand: prepare } : {}),
+        // Its result said on the browser's toolbar too, with Done to clear the page's boxes.
+        toolbar: true,
+      };
+      await openIntegrationDefinitionPage(page, profile, { kind: 'ready-check-validation', reload: true, context, payload: { readyChecks: checks } }, true);
+    }).then((result) => {
+      const answer = result as NonNullable<NonNullable<typeof setup.prepare.test>['result']>;
+      setup.prepare.test = { pending: null, result: { ready: answer.ready, message: answer.message, elements: answer.elements ?? [], ...(answer.steps ? { steps: answer.steps } : {}) }, problem: null };
+    }, (error: unknown) => {
+      setup.prepare.test = { pending: null, result: null, problem: integrationPageRequestFailed(error, 'Testing didn’t finish') ?? 'Testing didn’t finish.' };
+    }).finally(() => rerender({ preserveMountedDocument: true }));
+  },
+  // UI: Get to the list window, a step's ×: the steps without it (none left, no steps).
+  removeSiteSetupPrepareStep: (index) => {
+    const listPage = siteSetupListPage();
+    const prepare = listPage?.page.commands?.find((command) => command.prepare);
+    if (!listPage || !prepare || !state.siteSetup) return;
+    const steps = prepare.steps.filter((_, stepIndex) => stepIndex !== index);
+    listPage.page.commands = (listPage.page.commands ?? []).flatMap((command) => (command !== prepare ? [command] : steps.length ? [{ ...command, steps }] : []));
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.siteSetup.prepare.test = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  // UI: Get to the list window, a ready check's ×.
+  removeSiteSetupReadyCheck: (checkId) => {
+    const listPage = siteSetupListPage();
+    if (!listPage?.page.readyChecks || !state.siteSetup) return;
+    listPage.page.readyChecks = { ...listPage.page.readyChecks, elements: listPage.page.readyChecks.elements.filter((check) => check.id !== checkId) };
+    saveIntegrationRegistry(state.integrationRegistry);
+    state.siteSetup.prepare.test = null;
+    rerender({ preserveMountedDocument: true });
+  },
+  saveIntegrationCommand: (name, inputNames, kind = {}) => {
+    const { pagination } = kind;
     const integration = state.integrationRegistry.integrations.find((candidate) => candidate.id === state.integrationCommandDraftIntegrationId);
     const action = integration?.actions.find((candidate) => candidate.id === state.integrationCommandDraftActionId);
     const page = integration?.pages.find((candidate) => candidate.id === state.integrationCommandDraftPageId);
@@ -1864,10 +2208,13 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
         ...(step.gesture === 'select' && step.allowCustom ? { allowCustom: true } : {}),
       });
     }
+    const prepare = state.integrationCommandDraftPrepare;
     const command = {
       id: `command-${crypto.randomUUID()}`,
       name: commandName,
       scope: state.integrationCommandDraftScope,
+      ...(pagination ? { pagination } : {}),
+      ...(prepare ? { prepare: true as const } : {}),
       ...(inputs.length ? { inputs } : {}),
       steps: state.integrationCommandDraftSteps.map((step) => ({
         ...step,
@@ -1879,12 +2226,14 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
       action!.commands ??= [];
       action!.commands!.push(command);
     } else {
-      page.commands ??= [];
-      page.commands.push(command);
+      // A list has one way to its next page, and one to where it is read: recording either again replaces it.
+      page.commands = [...(page.commands ?? []).filter((existing) => !(pagination && existing.pagination) && !(prepare && existing.prepare)), command];
     }
     saveIntegrationRegistry(state.integrationRegistry);
     state.integrationCommandBuilderOpen = false;
     state.integrationCommandDraftSteps = [];
+    state.integrationCommandDraftPagination = false;
+    state.integrationCommandDraftPrepare = false;
     state.status = `Saved ${commandName}`;
     rerender({ preserveMountedDocument: true });
   },
@@ -2076,7 +2425,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     const homepage = document.includedDocumentId
       ? { kind: 'included' as const, id: document.includedDocumentId }
       : document.source.path && !document.isNew && !document.virtual && workspaceFile && !workspaceFile.archived
-        ? { kind: 'file' as const, path: document.source.path }
+        ? { kind: 'file' as const, file: document.source.documentId }
         : null;
     if (!homepage) return;
     state.appSettingsDraft = { ...settings, homepage };
@@ -2097,7 +2446,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     if (state.homepagePickerMode === 'settings') {
       state.appSettingsDraft = {
         ...(state.appSettingsDraft ?? state.appSettings),
-        homepage: { kind: 'file', path },
+        homepage: { kind: 'file', file: fileKeyForPath(path) },
       };
       state.homepagePickerMode = null;
       state.status = 'Selected homepage document';
@@ -2106,7 +2455,7 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     }
     if (state.homepagePickerMode !== 'recovery') return;
     void runBusy('Opening homepage...', async () => {
-      state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'file', path } });
+      state.appSettings = await saveAppSettings({ ...state.appSettings, homepage: { kind: 'file', file: fileKeyForPath(path) } });
       state.homepagePickerMode = null;
       state.homepageError = null;
       await openHomepage();
@@ -2123,7 +2472,9 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Homepage disabled';
   }),
   saveAppSettings: (settings) => void runBusy('Saving settings...', async () => {
-    state.appSettings = await saveAppSettings(settings);
+    // Scheduled jobs aren't edited here, and change while the dialog is open (a job turned on in its document, a job's
+    // turn recorded): the dialog's copy from when it opened would undo that, so the current ones are kept.
+    state.appSettings = await saveAppSettings({ ...settings, scheduledDocuments: state.appSettings.scheduledDocuments });
     configureDebugLog({ maxBytes: state.appSettings.debugLogMaxBytes });
     installAiChatClient(state.aiSettings, state.appSettings);
     state.appSettingsDialogOpen = false;
@@ -2167,15 +2518,47 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
+  openScheduledJobs: () => {
+    state.scheduledJobsDialogOpen = true;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  closeScheduledJobs: () => {
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  setScheduledJobOn: (path, jobId, on) => {
+    state.scheduledJobsDraft = { ...state.scheduledJobsDraft, [scheduledJobKey(fileKeyForPath(path), jobId)]: on };
+  },
+  // Applied to the settings as they are now (a job's turn may have been recorded meanwhile); jobs all off drop out.
+  saveScheduledJobs: () => {
+    const changes = Object.entries(state.scheduledJobsDraft);
+    updateScheduledDocuments((documents) => withoutUnused(changes.reduce((current, [key, on]) => {
+      const [file, jobId] = key.split('\u0000') as [FileKey, string];
+      return current[file] ? { ...current, [file]: withJobOn(current[file], jobId, on) } : current;
+    }, documents)));
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    rerender({ preserveMountedDocument: true });
+  },
+  // A job's document, from Scheduled jobs: opened, the dialog closed (its unsaved changes dropped, as with Cancel).
+  openScheduledDocument: (path) => {
+    state.scheduledJobsDialogOpen = false;
+    state.scheduledJobsDraft = {};
+    const open = [...documentSessions.values()].find((session) => session.source.path === path);
+    void selectDocumentTab(open?.versionId ?? path);
+  },
   closeScriptingReview: () => {
     state.scriptingReviewDialogOpen = false;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
   setWholeFilePowerScriptingAllowed: (path, allowed) => void runBusy('Updating power scripting approvals...', async () => {
+    const file = fileKeyForPath(path);
     const allowedFiles = new Set(state.appSettings.powerScriptingAllowedFiles);
-    if (allowed) allowedFiles.add(path);
-    else allowedFiles.delete(path);
+    if (allowed) allowedFiles.add(file);
+    else allowedFiles.delete(file);
     state.appSettings = await saveAppSettings({
       ...state.appSettings,
       powerScriptingAllowedFiles: [...allowedFiles],
@@ -2184,18 +2567,19 @@ export function createSettingsHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   }),
   revokePowerScriptAcceptance: (path, fingerprint) => void runBusy('Revoking power script approval...', async () => {
-    const fingerprints = (state.appSettings.powerScriptAcceptances[path] ?? [])
+    const file = fileKeyForPath(path);
+    const fingerprints = (state.appSettings.powerScriptAcceptances[file] ?? [])
       .filter((candidate) => candidate !== fingerprint);
     const powerScriptAcceptances = { ...state.appSettings.powerScriptAcceptances };
-    if (fingerprints.length > 0) powerScriptAcceptances[path] = fingerprints;
-    else delete powerScriptAcceptances[path];
+    if (fingerprints.length > 0) powerScriptAcceptances[file] = fingerprints;
+    else delete powerScriptAcceptances[file];
     const fileAcceptanceScripts = Object.fromEntries(
-      Object.entries(state.appSettings.powerScriptAcceptanceScripts[path] ?? {})
+      Object.entries(state.appSettings.powerScriptAcceptanceScripts[file] ?? {})
         .filter(([candidate]) => candidate !== fingerprint),
     );
     const powerScriptAcceptanceScripts = { ...state.appSettings.powerScriptAcceptanceScripts };
-    if (Object.keys(fileAcceptanceScripts).length > 0) powerScriptAcceptanceScripts[path] = fileAcceptanceScripts;
-    else delete powerScriptAcceptanceScripts[path];
+    if (Object.keys(fileAcceptanceScripts).length > 0) powerScriptAcceptanceScripts[file] = fileAcceptanceScripts;
+    else delete powerScriptAcceptanceScripts[file];
     state.appSettings = await saveAppSettings({
       ...state.appSettings,
       powerScriptAcceptances,

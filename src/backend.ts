@@ -1,3 +1,4 @@
+import { DEFAULT_SCHEDULED_JOBS_AT_ONCE, normalizeScheduledDocuments, normalizeScheduledJobsAtOnce, type ScheduledDocuments } from './webAutomation/scheduleSettings';
 import { documentFileChanges } from './documentFileChanges';
 import { invoke } from '@tauri-apps/api/core';
 import { deferEncryptedWorkspace, resolveEncryptedWorkspace } from './encryptedFolders';
@@ -5,6 +6,10 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { measureDebugAsync } from './debugLog';
 import type { WebCapabilityAuthorizations, WebCapabilityProfileBindings } from './webCapabilities';
+import type { CapabilityAuthorizations } from './webAutomation/authorization';
+import type { FileKey } from './runtimeDocuments';
+import { appSettingsForStorage, appSettingsFromStorage } from './appSettingsFiles';
+import { DEFAULT_COLLECTION_WORKER_LIMITS, normalizeCollectionWorkerLimits, type CollectionWorkerLimits } from './webAutomation/settings';
 import { normalizeIntegrationWebMcpApprovals, type IntegrationWebMcpApprovals } from './integrationWebMcp';
 import { normalizePluginProjectRecord, type CreatePluginProjectRequest, type PluginProjectBuildResult, type PluginProjectFile, type PluginProjectRecord, type WritePluginProjectBuildRequest, type WritePluginProjectFileRequest } from './pluginProjects';
 
@@ -16,6 +21,7 @@ declare global {
       onOpenDocumentPath(callback: (path: string) => void): () => void;
       onAppCloseRequest(callback: () => void): () => void;
       onIntegrationInspectionResult(callback: (result: unknown) => void): () => void;
+      onIntegrationBrowserEvent(callback: (browserEvent: unknown) => void): () => void;
       onWebMcpBrokerRequest(callback: (request: WebMcpBrokerRequest) => void): () => void;
     };
   }
@@ -359,6 +365,17 @@ export interface WorkspaceFolderRequest {
   };
 }
 
+export interface RenameWorkspaceFolderRequest {
+  workspacePath: string;
+  targetDirectory: string;
+  name: string;
+}
+
+export interface RenamedWorkspaceFolder {
+  workspace: Workspace;
+  relocatedFiles: WorkspaceFileRelocation[];
+}
+
 export interface DeleteWorkspaceFolderRequest {
   workspacePath: string;
   targetDirectory: string;
@@ -494,6 +511,12 @@ export interface ImageAttachmentMaxDimensions {
 
 export type HomepageSetting =
   | { kind: 'included'; id: string }
+  | { kind: 'file'; file: FileKey }
+  | { kind: 'none' };
+
+/** The homepage as saved: a file by its path. */
+export type StoredHomepageSetting =
+  | { kind: 'included'; id: string }
   | { kind: 'file'; path: string }
   | { kind: 'none' };
 
@@ -507,11 +530,11 @@ export const includedDocuments: IncludedDocument[] = [
   { id: 'hvy-guide', name: 'HVY Guide' },
 ];
 
-export function normalizeHomepageSetting(value: unknown): HomepageSetting {
+export function normalizeHomepageSetting(value: unknown): StoredHomepageSetting {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return { kind: 'included', id: 'hvy-galaxy-guide' };
   }
-  const setting = value as Partial<HomepageSetting>;
+  const setting = value as Partial<StoredHomepageSetting & { id: string; path: string }>;
   if (setting.kind === 'included' && typeof setting.id === 'string' && includedDocuments.some((document) => document.id === setting.id)) {
     return { kind: 'included', id: setting.id };
   }
@@ -522,20 +545,35 @@ export function normalizeHomepageSetting(value: unknown): HomepageSetting {
   return { kind: 'included', id: 'hvy-galaxy-guide' };
 }
 
-export interface AppSettings {
-  homepage: HomepageSetting;
+/**
+ * App settings, with the settings Galaxy keeps per file keyed by `K`: the file's reference (`FileKey`) in memory
+ * (`AppSettings`), its path where saved (`StoredAppSettings`). appSettingsFiles.ts converts between the two.
+ */
+interface AppSettingsFields<K extends string, Homepage> {
+  homepage: Homepage;
   imageAttachmentMaxDimensions: ImageAttachmentMaxDimensions;
-  powerScriptingAllowedFiles: string[];
-  powerScriptAcceptances: Record<string, string[]>;
-  powerScriptAcceptanceScripts: Record<string, Record<string, Array<{ id: string; hash: string }>>>;
+  powerScriptingAllowedFiles: K[];
+  powerScriptAcceptances: Record<K, string[]>;
+  powerScriptAcceptanceScripts: Record<K, Record<string, Array<{ id: string; hash: string }>>>;
   debugSemanticSearch: boolean;
   debugLogMaxBytes: number;
   pluginPolicies: Record<string, 'disabled' | 'enabled' | 'conditional'>;
-  pluginAcceptances: Record<string, string[]>;
-  webCapabilityProfileBindings: WebCapabilityProfileBindings;
-  webCapabilityAuthorizations: WebCapabilityAuthorizations;
+  pluginAcceptances: Record<K, string[]>;
+  webCapabilityProfileBindings: WebCapabilityProfileBindings<K>;
+  webCapabilityAuthorizations: WebCapabilityAuthorizations<K>;
   integrationWebMcpApprovals: IntegrationWebMcpApprovals;
+  /** Web API service approvals by file (galaxy.web-api, approved at sign-in). */
+  webServiceApprovals: CapabilityAuthorizations<K>;
+  /** How many pages web collection reads at once: on one site, and in all. */
+  webCollectionLimits: CollectionWorkerLimits;
+  /** Documents with scheduled jobs: which jobs the user turned on, and when each last started. */
+  scheduledDocuments: ScheduledDocuments<K>;
+  /** How many scheduled jobs' work may go on at once: the next job waits until fewer are busy. */
+  scheduledJobsAtOnce: number;
 }
+
+export type AppSettings = AppSettingsFields<FileKey, HomepageSetting>;
+export type StoredAppSettings = AppSettingsFields<string, StoredHomepageSetting>;
 
 export interface InstalledPluginPackageFile {
   name: string;
@@ -543,7 +581,7 @@ export interface InstalledPluginPackageFile {
   bytes: number[];
 }
 
-export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'check-page-ready' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
+export type IntegrationBrowserCommand = 'open' | 'back' | 'forward' | 'reload' | 'inspect' | 'inspect-parent' | 'inspect-target' | 'test-pattern' | 'check-page-ready' | 'extract-pattern' | 'cancel-extraction' | 'execute-command' | 'discover-sources' | 'fetch-source' | 'discover-webmcp-tools' | 'invoke-webmcp-tool' | 'cancel-inspect' | 'focus-browser' | 'focus-main' | 'close';
 export type IntegrationBrowserDestination = 'msn' | 'gmail' | 'calendar';
 export interface IntegrationStorageProbeResult {
   cookieName: string;
@@ -665,18 +703,25 @@ export function loadAppSettings(): Promise<AppSettings> {
   if (!isTauriRuntime() && !isElectronRuntime()) {
     return Promise.resolve(defaultAppSettings());
   }
-  return invokeDesktop<AppSettings>('load_app_settings').then((settings) => ({
+  return invokeDesktop<StoredAppSettings>('load_app_settings').then(storedAppSettingsLoaded);
+}
+
+// Saved settings as they come back from the desktop app, validated, and held by each file's reference.
+function storedAppSettingsLoaded(settings: StoredAppSettings): AppSettings {
+  return appSettingsFromStorage({
     ...settings,
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals),
-  }));
+    // Stored as given (Tauri keeps it as plain JSON, null until first saved): validated here.
+    webCollectionLimits: normalizeCollectionWorkerLimits(settings.webCollectionLimits),
+    scheduledDocuments: normalizeScheduledDocuments(settings.scheduledDocuments),
+    scheduledJobsAtOnce: normalizeScheduledJobsAtOnce(settings.scheduledJobsAtOnce),
+  });
 }
 
 export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
-  const normalized = { ...settings, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings.integrationWebMcpApprovals) };
-  return invokeDesktop<AppSettings>('save_app_settings', { settings: normalized }).then((saved) => ({
-    ...saved,
-    integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(saved.integrationWebMcpApprovals),
-  }));
+  const stored = appSettingsForStorage(settings);
+  const normalized = { ...stored, integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(stored.integrationWebMcpApprovals) };
+  return invokeDesktop<StoredAppSettings>('save_app_settings', { settings: normalized }).then(storedAppSettingsLoaded);
 }
 
 export function loadInstalledPluginPackages(): Promise<InstalledPluginPackageFile[]> {
@@ -874,6 +919,10 @@ export function defaultAppSettings(): AppSettings {
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
+    webServiceApprovals: {},
+    webCollectionLimits: DEFAULT_COLLECTION_WORKER_LIMITS,
+    scheduledDocuments: {},
+    scheduledJobsAtOnce: DEFAULT_SCHEDULED_JOBS_AT_ONCE,
   };
 }
 
@@ -1282,6 +1331,11 @@ export async function deleteEncryptedFolderChild(request: DeleteEncryptedFolderC
   return resolveEncryptedWorkspace(workspace, loadDocumentKeys);
 }
 
+export async function renameWorkspaceFolder(request: RenameWorkspaceFolderRequest): Promise<RenamedWorkspaceFolder> {
+  const renamed = await invokeDesktop<RenamedWorkspaceFolder>('rename_workspace_folder', { request });
+  return { ...renamed, workspace: await resolveEncryptedWorkspace(renamed.workspace, loadDocumentKeys) };
+}
+
 export function deleteWorkspaceFolder(request: DeleteWorkspaceFolderRequest): Promise<Workspace> {
   return invokeDesktop('delete_workspace_folder', { request });
 }
@@ -1596,6 +1650,16 @@ export function onIntegrationInspectionResult(handler: (result: unknown) => void
   if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationInspectionResult(handler));
   if (!isTauriRuntime()) return Promise.resolve(() => undefined);
   return listen<unknown>('integration-inspection-result', (event) => handler(event.payload));
+}
+
+/**
+ * What the integration browser's host reports (the browser closed, a toolbar action, a navigation to approve), apart from
+ * what the page's scripts send (`onIntegrationInspectionResult`): a site's own script can send those, never these.
+ */
+export function onIntegrationBrowserEvent(handler: (browserEvent: unknown) => void): Promise<() => void> {
+  if (isElectronRuntime()) return Promise.resolve(window.hvyElectron!.onIntegrationBrowserEvent(handler));
+  if (!isTauriRuntime()) return Promise.resolve(() => undefined);
+  return listen<unknown>('integration-browser-event', (event) => handler(event.payload));
 }
 
 export interface WebMcpBrokerRequest {

@@ -1,0 +1,76 @@
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/hashes/utils';
+import { stableJson } from '../webCapabilities';
+
+export interface CapabilityAuthorization {
+  capabilityId: string;
+  /** The service's display name, for listing approvals in app settings. */
+  name?: string;
+  profileId: string;
+  /** One hash per reviewable category, so a review can name what changed. */
+  partHashes: Record<string, string>;
+  authorizedAt: number;
+}
+
+/** File → capabilityId → authorization: by the file's reference in memory, its path where saved in local app settings, never in the document. */
+export type CapabilityAuthorizations<K extends string> = Record<K, Record<string, CapabilityAuthorization>>;
+
+export type AuthorizationReviewReason = 'authorized' | 'first-use' | 'profile-changed' | 'capability-changed';
+
+export interface AuthorizationReview {
+  capabilityId: string;
+  reason: AuthorizationReviewReason;
+  changedCategories: string[];
+}
+
+function hashPart(value: unknown): string {
+  return bytesToHex(sha256(new TextEncoder().encode(stableJson(value ?? null))));
+}
+
+export function hashAuthorizationParts(parts: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.entries(parts).map(([category, value]) => [category, hashPart(value)]));
+}
+
+export function reviewAuthorization<K extends string>(
+  authorizations: CapabilityAuthorizations<K>,
+  documentPath: NoInfer<K>,
+  capabilityId: string,
+  parts: Record<string, unknown>,
+  profileId: string,
+): AuthorizationReview {
+  const existing = authorizations[documentPath]?.[capabilityId];
+  if (!existing) return { capabilityId, reason: 'first-use', changedCategories: [] };
+  if (existing.profileId !== profileId) return { capabilityId, reason: 'profile-changed', changedCategories: [] };
+  const current = hashAuthorizationParts(parts);
+  const categories = new Set([...Object.keys(current), ...Object.keys(existing.partHashes)]);
+  const changedCategories = [...categories].filter((category) => current[category] !== existing.partHashes[category]).sort();
+  if (changedCategories.length) return { capabilityId, reason: 'capability-changed', changedCategories };
+  return { capabilityId, reason: 'authorized', changedCategories: [] };
+}
+
+export function recordAuthorization<K extends string>(
+  authorizations: CapabilityAuthorizations<K>,
+  documentPath: NoInfer<K>,
+  capabilityId: string,
+  parts: Record<string, unknown>,
+  profileId: string,
+  now: number,
+  name?: string,
+): CapabilityAuthorizations<K> {
+  return {
+    ...authorizations,
+    [documentPath]: {
+      ...(authorizations[documentPath] ?? {}),
+      [capabilityId]: { capabilityId, ...(name ? { name } : {}), profileId, partHashes: hashAuthorizationParts(parts), authorizedAt: now },
+    },
+  };
+}
+
+/** Withdraws a service approval; the next use asks again. */
+export function revokeAuthorization<K extends string>(authorizations: CapabilityAuthorizations<K>, documentPath: NoInfer<K>, capabilityId: string): CapabilityAuthorizations<K> {
+  const { [capabilityId]: _revoked, ...remaining } = authorizations[documentPath] ?? {};
+  const next = { ...authorizations };
+  if (Object.keys(remaining).length) next[documentPath] = remaining;
+  else delete next[documentPath];
+  return next;
+}

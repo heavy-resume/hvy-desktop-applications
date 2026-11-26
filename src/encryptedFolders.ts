@@ -233,6 +233,7 @@ export function workspaceHasLogicalName(
   parentDirectory: string,
   logicalName: string,
   excludingRelativePath = '',
+  { ignoreArchived = false }: { ignoreArchived?: boolean } = {},
 ): boolean {
   if (!workspace) return false;
   const parentTarget = normalizeRelativePath(parentDirectory);
@@ -250,6 +251,7 @@ export function workspaceHasLogicalName(
   };
   return (findChildren(workspace.files) ?? []).some((node) => (
     normalizeRelativePath(node.relativePath) !== excludedTarget
+    && !(ignoreArchived && node.kind === 'file' && node.archived)
     && node.name.normalize('NFC').toLowerCase() === nameKey
   ));
 }

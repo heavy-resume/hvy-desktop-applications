@@ -6,8 +6,12 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { pathToFileURL } = require('node:url');
+const { createWebAutomationHost } = require('./web-automation-host.cjs');
+const { allowPopups, attachBrowserChrome } = require('./browser-chrome.cjs');
+const { runWebMcp } = require('./integration-webmcp.cjs');
 const { promisify } = require('node:util');
 const { deleteDocumentKeyFromVaultFile, readDocumentKeyVaultFile, writeDocumentKeyVaultFile } = require('./document-key-vault.cjs');
+const { RECENT_LIMIT, pushRecent } = require('./recent-entries.cjs');
 
 for (const stream of [process.stdout, process.stderr]) {
   stream?.on('error', (error) => {
@@ -25,14 +29,12 @@ const APP_SETTINGS = 'app-settings.json';
 const INTEGRATION_VAULT_FILE = 'integration-cookie-vault-electron.json';
 const INTEGRATION_VAULT_KEY_FILE = 'integration-vault-key-electron.bin';
 const DOCUMENT_KEY_VAULT_FILE = 'document-key-vault-v1.json';
-const DOCUMENT_KEY_VAULT_KEY_FILE = 'document-key-vault-key-electron.bin';
 const DOCUMENT_KEY_MIGRATION_PREFIX = 'document-key-migration-';
 const ENCRYPTED_FOLDER_MANIFEST_FILE = '.hvy-folder';
 const ENCRYPTED_FOLDER_PHYSICAL_PREFIX = 'hvy-encrypted-folder-';
 const DOCUMENT_ENCRYPTION_PREFIX = Buffer.from('---HVY-ENCRYPTED---\n');
 const MCP_SETTINGS = 'mcp-settings.json';
 const MCP_STDIO_WORKSPACE_CONFIG = 'hvy-galaxy-mcp-workspaces.json';
-const RECENT_LIMIT = 12;
 const DEFAULT_AI_MAX_CONTEXT_CHARS = 40000;
 const AI_MIN_CONTEXT_CHARS = 1000;
 const AI_MAX_CONTEXT_CHARS = 750000;
@@ -111,7 +113,7 @@ app.on('open-file', (event, filePath) => {
 });
 
 app.whenReady().then(async () => {
-  recoverPendingDocumentKeyMigrations();
+  await recoverPendingDocumentKeyMigrations();
   mainWindow = createWindow();
   bindWindowShortcuts(mainWindow);
   buildMenu();
@@ -296,13 +298,13 @@ async function loadPluginBuilderRenderer(window, workspacePaths, selectedWorkspa
     ...(selectedWorkspacePath ? { selectedWorkspace: selectedWorkspacePath } : {}),
   };
   if (process.env.ELECTRON_RENDERER_URL) {
-    const url = new URL('/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
+    const url = new URL('/pages/plugin-builder.html', process.env.ELECTRON_RENDERER_URL);
     url.searchParams.set('workspaces', JSON.stringify(workspacePaths));
     if (selectedWorkspacePath) url.searchParams.set('selectedWorkspace', selectedWorkspacePath);
     await window.loadURL(url.toString());
     return;
   }
-  await window.loadFile(path.join(__dirname, '..', 'dist', 'plugin-builder.html'), { query });
+  await window.loadFile(path.join(__dirname, '..', 'dist', 'pages', 'plugin-builder.html'), { query });
 }
 
 function buildMenu() {
@@ -408,6 +410,7 @@ function buildMenu() {
         menuItem('Manage Plugins...', 'manage-plugins'),
         { type: 'separator' },
         menuItem('Power Scripting...', 'review-scripting'),
+        menuItem('Scheduled Jobs...', 'scheduled-jobs'),
       ],
     },
     {
@@ -641,6 +644,7 @@ async function handleCommand(command, args) {
     case 'read_plugin_project_files': return readPluginProjectFiles(args.workspacePath, args.directoryName);
     case 'write_plugin_project_file': return writePluginProjectFile(args.request);
     case 'write_plugin_project_build': return writePluginProjectBuild(args.request);
+    case 'web_automation_host': return webAutomationHost.command(args.command, args);
     case 'integration_browser_command': return integrationBrowserCommand(args.command, args.destination, args.profileId, args.url, args.allowedOrigins, args.actionMode, args.payload, args.foreground, args.windowName, args.integrationId, args.pageId);
     case 'integration_browser_is_open': {
       const browser = integrationBrowsers.get(args.profileId || 'default-google');
@@ -653,7 +657,7 @@ async function handleCommand(command, args) {
     case 'reset_integration_vault': return resetIntegrationVault();
     case 'load_document_key_vault_status': return loadDocumentKeyVaultStatus();
     case 'load_document_keys': return loadDocumentKeys(args.keyIds);
-    case 'try_load_document_keys': return null;
+    case 'try_load_document_keys': return tryLoadDocumentKeys(args.keyIds);
     case 'list_document_key_metadata': return listDocumentKeyMetadata();
     case 'store_document_keys': return storeDocumentKeys(args.entries);
     case 'delete_document_key': return deleteDocumentKey(args.keyId);
@@ -738,6 +742,7 @@ async function handleCommand(command, args) {
     case 'restore_document_file': return restoreDocumentFile(args.path);
     case 'delete_document_file': return deleteDocumentFile(args.path);
     case 'delete_workspace_folder': return deleteWorkspaceFolder(args.request);
+    case 'rename_workspace_folder': return renameWorkspaceFolder(args.request);
     case 'save_document_to_workspace': return saveDocumentToWorkspace(args.workspacePath, args.name, args.bytes, args.targetDirectory || '');
     case 'copy_document_to_workspace': return copyDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
     case 'move_document_to_workspace': return moveDocumentToWorkspace(args.path, args.workspacePath, args.targetDirectory || '');
@@ -764,8 +769,97 @@ const INTEGRATION_URLS = {
 };
 
 const INTEGRATION_INSPECTOR = fs.readFileSync(path.join(__dirname, '..', 'src', 'integration-inspector.js'), 'utf8');
-const INTEGRATION_TOOLBAR = fs.readFileSync(path.join(__dirname, '..', 'public', 'integration-browser-toolbar.html'), 'utf8');
-const INTEGRATION_TOOLBAR_HEIGHT = 52;
+// The isolated world Galaxy's scripts run in, in every page it reads (runInIntegrationWorld).
+const INTEGRATION_WORLD_ID = 1001;
+// Web automation's browser host: workers, the sign-in window, and inspection (web-automation-host.cjs).
+const webAutomationHost = createWebAutomationHost({
+  // A profile's saved cookies, shared with the integration browser through the integration vault, once it is set up.
+  profileCookies: {
+    available: () => {
+      const status = loadIntegrationVaultStatus();
+      return status.configured && status.hasVault;
+    },
+    restore: restoreElectronIntegrationCookies,
+    save: (browserSession, profileId, domains) => mergeElectronProfileCookies(browserSession, profileId, (domain) => domains.has(domain)),
+  },
+  inspectorSource: INTEGRATION_INSPECTOR,
+  worldId: INTEGRATION_WORLD_ID,
+  pageSource: fs.readFileSync(path.join(__dirname, '..', 'src', 'web-automation-page.js'), 'utf8'),
+  sendEvent: (event) => mainWindow?.webContents.send('hvy:web-automation-navigation', event),
+  // The sign-in window's toolbar, and its pop-ups (browser-chrome.cjs).
+  chrome: { attach: attachBrowserChrome, allowPopups, loadToolbar: (contents, mode) => loadIntegrationToolbar(contents, mode), icon: iconPath(appIconFileName()) },
+});
+
+// A browser's toolbar (browser-chrome.cjs): the app's built page (pages/integration-toolbar.html), from the dev server or
+// dist; `mode` is `integration`, or `browse` for a plain browser's.
+async function loadIntegrationToolbar(contents, mode = 'integration') {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    const url = new URL('/pages/integration-toolbar.html', process.env.ELECTRON_RENDERER_URL);
+    url.searchParams.set('mode', mode);
+    await contents.loadURL(url.toString());
+    return;
+  }
+  await contents.loadFile(path.join(__dirname, '..', 'dist', 'pages', 'integration-toolbar.html'), { query: { mode } });
+}
+
+// What an integration browser's toolbar asks beyond its browser buttons and Site information (browser-chrome.cjs): its
+// page menu, picking's buttons, and an address typed, inside its allowed sites or asked about.
+function receiveIntegrationToolbarMessage(browser, message) {
+  if (message.kind === 'toolbar-action' && typeof message.action === 'string') {
+    mainWindow?.webContents.send('hvy:integration-browser-event', { kind: 'integration-toolbar-action', action: message.action, profileId: browser.profileId });
+    raiseWindow(mainWindow);
+  } else if (message.kind === 'inspector-control' && typeof message.id === 'string' && /^[a-z0-9-]+$/.test(message.id)) {
+    // A button the page's picker put on the toolbar, by its id.
+    void runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.control(${JSON.stringify(message.id)})`);
+  } else if (message.kind === 'navigate' && typeof message.url === 'string') {
+    if (isAllowedIntegrationUrl(message.url, browser.allowedOrigins)) void browser.contents.loadURL(message.url);
+    else requestIntegrationNavigationApproval(browser, message.url, 'address');
+  }
+}
+
+// What an integration browser's preload asks (integration-preload.cjs): the isolated world Galaxy's scripts run in, which
+// it gives Galaxy's channel. Only an integration browser's page is told.
+ipcMain.on('hvy:integration-page-setup', (event) => {
+  const known = [...integrationBrowsers.values()].some((candidate) => candidate.contents === event.sender);
+  event.returnValue = known ? { worldId: INTEGRATION_WORLD_ID } : null;
+});
+
+// What Galaxy's scripts in an integration browser's page send, from their isolated world (integration-inspector.js).
+ipcMain.on('hvy:integration-page-message', (event, message) => {
+  const browser = [...integrationBrowsers.values()].find((candidate) => candidate.contents === event.sender);
+  if (!browser || !message || typeof message !== 'object') return;
+  if (message.kind === 'publish') receiveIntegrationResult(browser, message.value);
+  if (message.kind === 'toolbar-state') setIntegrationToolbarInspectionState(browser, message.value);
+  // Picking cancelled in the page (Escape): told to Galaxy as a result, which ends the selection it waits for.
+  if (message.kind === 'cancel') receiveIntegrationResult(browser, { kind: 'integration-inspection-cancelled' });
+});
+
+// A result from the page: the inspector's, or the WebMCP bridge's. A background one (such as the scan on each page load)
+// doesn't end a selection the person is making, or bring Galaxy forward.
+function receiveIntegrationResult(browser, result) {
+  result.profileId = browser.profileId;
+  const isBackgroundResult = result?.kind === 'integration-page-readiness'
+    || result?.kind === 'integration-ready-check-validation'
+    || result?.kind === 'integration-record-watch-result'
+    // Highlight matches' confidence, told as it is set: the page stays in front.
+    || result?.kind === 'integration-pattern-confidence'
+    || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
+    || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
+    || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
+  if (!isBackgroundResult) {
+    browser.actionModePending = false;
+    setIntegrationToolbarInspectionState(browser);
+  }
+  mainWindow?.webContents.send('hvy:integration-inspection-result', result);
+  if (!isBackgroundResult) raiseWindow(mainWindow);
+}
+
+// Galaxy's scripts in an integration browser's page run in their own isolated world, out of the page's reach: the page
+// cannot see them, change what they call, or watch what they send. The WebMCP bridge is the exception: it works with
+// the page's own tools, in the page's world (integration-preload.cjs).
+function runInIntegrationWorld(contents, code) {
+  return contents.executeJavaScriptInIsolatedWorld(INTEGRATION_WORLD_ID, [{ code }]);
+}
 
 function setIntegrationToolbarInspectionState(browser, state = {}) {
   if (!browser?.toolbarContents || browser.toolbarContents.isDestroyed()) return;
@@ -778,7 +872,7 @@ function requestIntegrationNavigationApproval(browser, requestedUrl, navigationK
     void shell.openExternal(requestedUrl);
     return;
   }
-  mainWindow?.webContents.send('hvy:integration-inspection-result', {
+  mainWindow?.webContents.send('hvy:integration-browser-event', {
     kind: 'integration-navigation-request',
     profileId: browser.profileId,
     integrationId: browser.integrationId,
@@ -789,6 +883,9 @@ function requestIntegrationNavigationApproval(browser, requestedUrl, navigationK
   });
   raiseWindow(mainWindow);
 }
+
+/** Picking a record's box: what the browser starts when it opens to pick, until it is asked for another step. */
+const DEFAULT_INSPECTION_START = 'window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })';
 
 function integrationInspectorOptions(payload) {
   return { ...(payload && typeof payload === 'object' ? payload : {}), externalToolbar: true };
@@ -825,21 +922,22 @@ function integrationBrowserCommand(command, destination, profileId = 'default-go
   if (command === 'focus-main') {
     raiseWindow(mainWindow);
   }
-  if (command === 'inspect') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
-  if (command === 'inspect-parent') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("parent", ${JSON.stringify(integrationInspectorOptions(payload))})`);
-  if (command === 'inspect-target') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", ${JSON.stringify(integrationInspectorOptions(payload))})`);
-  if (command === 'test-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
-  if (command === 'check-page-ready') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'extract-pattern') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'cancel-extraction') return browserContents.executeJavaScript('window.__hvyGalaxyInspector?.cancelExtraction()');
-  if (command === 'execute-command') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
-  if (command === 'discover-sources') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
-  if (command === 'fetch-source') return browserContents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
-  if (command === 'discover-webmcp-tools') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-  if (command === 'invoke-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
-  if (command === 'cancel-webmcp-tool') return browserContents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.cancel(${JSON.stringify(payload?.requestId)}) : undefined`);
+  if (command === 'inspect' || command === 'inspect-parent' || command === 'inspect-target') {
+    // Kept, so a page that loads while picking (a check that you're human passed) starts the same step again.
+    browser.inspectionStart = `window.__hvyGalaxyInspector.start(${JSON.stringify(command === 'inspect-parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(payload))})`;
+    return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\n${browser.inspectionStart}`);
+  }
+  if (command === 'test-pattern') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.matchAndHighlight(${JSON.stringify(payload || {})})`);
+  if (command === 'check-page-ready') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(${JSON.stringify(payload?.readyChecks || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'extract-pattern') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.extractAndPublish(${JSON.stringify(payload?.pattern || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'cancel-extraction') return runInIntegrationWorld(browserContents, 'window.__hvyGalaxyInspector?.cancelExtraction()');
+  if (command === 'execute-command') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.executeCommandAndReport(${JSON.stringify(payload || {})})`);
+  if (command === 'discover-sources') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish(${JSON.stringify(payload || {})})`);
+  if (command === 'fetch-source') return runInIntegrationWorld(browserContents, `${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(${JSON.stringify(payload?.source || {})}, ${JSON.stringify(payload?.context || {})})`);
+  if (command === 'discover-webmcp-tools') return runWebMcp(browser.contents, 'discover', payload).then((result) => receiveIntegrationResult(browser, result));
+  if (command === 'invoke-webmcp-tool') return runWebMcp(browser.contents, 'invoke', payload).then((result) => receiveIntegrationResult(browser, result));
   if (command === 'cancel-inspect') {
-    browserContents.executeJavaScript('window.__hvyGalaxyInspector?.stop()');
+    runInIntegrationWorld(browserContents, 'window.__hvyGalaxyInspector?.stop()');
     setIntegrationToolbarInspectionState(browser);
     raiseWindow(mainWindow);
   }
@@ -922,15 +1020,25 @@ async function restoreElectronIntegrationCookies(browserSession, profileId) {
 
 async function saveElectronIntegrationCookies(browserSession, profileId, allowedOrigins) {
   const allowedHosts = allowedOrigins ? new Set([...allowedOrigins].map((origin) => new URL(origin).hostname)) : null;
-  const cookies = (await browserSession.cookies.get({})).filter((cookie) => {
-    const domain = cookie.domain.replace(/^\./, '');
+  await mergeElectronProfileCookies(browserSession, profileId, (domain) => {
     if (allowedHosts) return [...allowedHosts].some((host) => domain === host || host.endsWith(`.${domain}`));
     return domain === 'google.com' || domain.endsWith('.google.com');
   });
+}
+
+/**
+ * Saves a session's cookies into its profile's vault entry, for the cookie domains `inScope` covers: the vault's cookies
+ * for those domains are replaced by the session's (so a sign-out there is saved too), and its cookies for other domains
+ * are kept. The integration browser and web automation's sessions share a profile's entry, each saving what it covers.
+ */
+async function mergeElectronProfileCookies(browserSession, profileId, inScope) {
+  const bare = (domain) => String(domain || '').replace(/^\./, '');
+  const cookies = (await browserSession.cookies.get({})).filter((cookie) => inScope(bare(cookie.domain)));
   const vault = readElectronIntegrationVault(readElectronIntegrationVaultKey());
   const profiles = vault.profiles ?? {};
+  const kept = (profiles[profileId]?.cookies ?? (profileId === 'default-google' ? vault.cookies ?? [] : [])).filter((cookie) => !inScope(bare(cookie.domain)));
   profiles[profileId] = {
-    cookies: cookies.map((cookie) => ({
+    cookies: [...kept, ...cookies.map((cookie) => ({
       name: cookie.name,
       value: cookie.value,
       domain: cookie.domain,
@@ -941,7 +1049,7 @@ async function saveElectronIntegrationCookies(browserSession, profileId, allowed
       hostOnly: cookie.hostOnly,
       session: cookie.session,
       expirationDate: cookie.expirationDate,
-    }))
+    }))],
   };
   delete vault.cookies;
   vault.profiles = profiles;
@@ -972,36 +1080,41 @@ function writeFileAtomically(target, bytes) {
   fs.renameSync(temporary, target);
 }
 
-function loadDocumentKeyVaultStatus() {
-  const configured = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
+const DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE = 'The protected local vault is incomplete. Its protected key and encrypted data file do not match.';
+let documentKeyVaultKeyCache = null;
+
+async function runDocumentKeyVaultKeyHelper(mode) {
+  const { stdout } = await runFile(rustHelperPath(), ['--document-key-vault-key', mode], { encoding: 'utf8' });
+  return JSON.parse(stdout);
+}
+
+async function loadDocumentKeyVaultStatus() {
   const hasVault = fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_FILE));
-  const status = (state, message) => ({
+  const status = (configured, state, message) => ({
     configured,
     hasVault,
-    storageMode: 'safeStorageVault',
+    storageMode: 'nativeKeyringVault',
     state,
     ...(message ? { message } : {}),
   });
-  if (configured !== hasVault) return status('incomplete', 'The protected local vault is incomplete. Its protected key and encrypted data file do not match.');
+  let key = documentKeyVaultKeyCache;
+  if (!key) {
+    const result = await runDocumentKeyVaultKeyHelper('get');
+    if (result.state === 'missing') return hasVault ? status(false, 'incomplete', DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE) : status(false, 'empty');
+    if (result.state === 'denied') return status(false, 'denied', 'Access to operating-system protected storage was denied or the store is locked.');
+    if (result.state === 'unavailable') return status(false, 'unavailable', 'Operating-system protected storage is unavailable.');
+    if (result.state !== 'found') return status(false, 'corrupt', 'The protected local vault could not be read.');
+    key = Buffer.from(result.key, 'base64');
+  }
+  if (!hasVault) return status(true, 'incomplete', DOCUMENT_KEY_VAULT_INCOMPLETE_MESSAGE);
   try {
-    if (!safeStorage.isEncryptionAvailable()) return status('unavailable', 'Operating-system protected storage is unavailable.');
-    if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') {
-      return status('unavailable', 'No protected operating-system credential store is available.');
-    }
+    if (key.length !== 32) throw new Error('The document key vault wrapping key is invalid.');
+    readDocumentKeyVault(key);
   } catch {
-    return status('unavailable', 'Operating-system protected storage is unavailable.');
+    return status(true, 'corrupt', 'The protected local vault could not be read or decrypted.');
   }
-  if (!configured) return status('empty');
-  try {
-    readDocumentKeyVault(readDocumentKeyVaultKey());
-    return status('ready');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/denied|permission|cancel|interaction.*not.*allowed|locked|user.*interaction/i.test(message)) {
-      return status('denied', 'Access to operating-system protected storage was denied or the store is locked.');
-    }
-    return status('corrupt', 'The protected local vault could not be read or decrypted.');
-  }
+  documentKeyVaultKeyCache = key;
+  return status(true, 'ready');
 }
 
 function requireUsableDocumentKeyVault(status) {
@@ -1009,19 +1122,22 @@ function requireUsableDocumentKeyVault(status) {
   throw new Error(status.message || `The protected local vault is ${status.state}.`);
 }
 
-function setupDocumentKeyVault() {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
-  const key = crypto.randomBytes(32);
-  writeFileAtomically(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE), safeStorage.encryptString(key.toString('base64')));
+async function setupDocumentKeyVault() {
+  const result = await runDocumentKeyVaultKeyHelper('create');
+  if (result.state !== 'found') throw new Error(result.message || 'Operating-system protected storage is unavailable.');
+  const key = Buffer.from(result.key, 'base64');
   writeDocumentKeyVault(key, { version: 1, keys: {} });
+  documentKeyVaultKeyCache = key;
   return key;
 }
 
-function readDocumentKeyVaultKey() {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Operating-system encryption is unavailable.');
-  const encryptedKey = fs.readFileSync(dataPath(DOCUMENT_KEY_VAULT_KEY_FILE));
-  const key = Buffer.from(safeStorage.decryptString(encryptedKey), 'base64');
+async function readDocumentKeyVaultKey() {
+  if (documentKeyVaultKeyCache) return documentKeyVaultKeyCache;
+  const result = await runDocumentKeyVaultKeyHelper('get');
+  if (result.state !== 'found') throw new Error(result.message || `The document key vault wrapping key is ${result.state}.`);
+  const key = Buffer.from(result.key, 'base64');
   if (key.length !== 32) throw new Error('The document key vault wrapping key is invalid.');
+  documentKeyVaultKeyCache = key;
   return key;
 }
 
@@ -1033,22 +1149,35 @@ function readDocumentKeyVault(key) {
   return readDocumentKeyVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key);
 }
 
-function loadDocumentKeys(keyIds) {
+async function loadDocumentKeys(keyIds) {
   if (!Array.isArray(keyIds) || keyIds.length === 0) return {};
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state === 'empty') return {};
   requireUsableDocumentKeyVault(status);
-  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  return pickDocumentKeys(readDocumentKeyVault(await readDocumentKeyVaultKey()), keyIds);
+}
+
+async function tryLoadDocumentKeys(keyIds) {
+  if (!Array.isArray(keyIds) || keyIds.length === 0 || !fs.existsSync(dataPath(DOCUMENT_KEY_VAULT_FILE))) return {};
+  if (!documentKeyVaultKeyCache) {
+    const result = await runDocumentKeyVaultKeyHelper('try-get');
+    if (result.state !== 'found') return null;
+    documentKeyVaultKeyCache = Buffer.from(result.key, 'base64');
+  }
+  return pickDocumentKeys(readDocumentKeyVault(documentKeyVaultKeyCache), keyIds);
+}
+
+function pickDocumentKeys(vault, keyIds) {
   return Object.fromEntries(keyIds.flatMap((keyId) => typeof keyId === 'string' && vault.keys[keyId]?.key
     ? [[keyId, vault.keys[keyId].key]]
     : []));
 }
 
-function listDocumentKeyMetadata() {
-  const status = loadDocumentKeyVaultStatus();
+async function listDocumentKeyMetadata() {
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state === 'empty') return [];
   requireUsableDocumentKeyVault(status);
-  const vault = readDocumentKeyVault(readDocumentKeyVaultKey());
+  const vault = readDocumentKeyVault(await readDocumentKeyVaultKey());
   return Object.entries(vault.keys).map(([keyId, entry]) => ({
     keyId,
     createdAt: entry.createdAt,
@@ -1058,11 +1187,11 @@ function listDocumentKeyMetadata() {
   })).sort((left, right) => left.keyId.localeCompare(right.keyId));
 }
 
-function storeDocumentKeys(entries) {
+async function storeDocumentKeys(entries) {
   if (!Array.isArray(entries) || entries.length === 0) return loadDocumentKeyVaultStatus();
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state !== 'empty') requireUsableDocumentKeyVault(status);
-  const key = status.state === 'ready' ? readDocumentKeyVaultKey() : setupDocumentKeyVault();
+  const key = status.state === 'ready' ? await readDocumentKeyVaultKey() : await setupDocumentKeyVault();
   const vault = readDocumentKeyVault(key);
   for (const entry of entries) {
     if (!entry || typeof entry.keyId !== 'string' || typeof entry.key !== 'string') throw new Error('Invalid document key entry.');
@@ -1089,11 +1218,11 @@ function storeDocumentKeys(entries) {
   return loadDocumentKeyVaultStatus();
 }
 
-function deleteDocumentKey(keyId) {
+async function deleteDocumentKey(keyId) {
   if (typeof keyId !== 'string' || !keyId.trim()) throw new Error('Invalid document key ID.');
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   requireUsableDocumentKeyVault(status);
-  const key = readDocumentKeyVaultKey();
+  const key = await readDocumentKeyVaultKey();
   deleteDocumentKeyFromVaultFile(dataPath(DOCUMENT_KEY_VAULT_FILE), key, keyId);
   return loadDocumentKeyVaultStatus();
 }
@@ -1191,11 +1320,11 @@ function commitDocumentKeyMigration(migrationId) {
   } catch (error) { throw error; }
 }
 
-function restoreDocumentKeyMigrationVault(journal) {
+async function restoreDocumentKeyMigrationVault(journal) {
   if (!journal.keyChanges?.length) return;
-  const status = loadDocumentKeyVaultStatus();
+  const status = await loadDocumentKeyVaultStatus();
   if (status.state !== 'ready') throw new Error(status.message || 'The protected local vault is unavailable during migration recovery.');
-  const wrappingKey = readDocumentKeyVaultKey();
+  const wrappingKey = await readDocumentKeyVaultKey();
   const vault = readDocumentKeyVault(wrappingKey);
   for (const change of journal.keyChanges) {
     const preserved = vault.keys[change.preservedKeyId];
@@ -1212,7 +1341,7 @@ function restoreDocumentKeyMigrationVault(journal) {
   writeDocumentKeyVault(wrappingKey, vault);
 }
 
-function rollbackDocumentKeyMigration(migrationId) {
+async function rollbackDocumentKeyMigration(migrationId) {
   const { journalPath, journal } = readDocumentKeyMigration(migrationId);
   if (journal.phase === 'complete') {
     for (const entry of journal.entries) {
@@ -1229,7 +1358,7 @@ function rollbackDocumentKeyMigration(migrationId) {
     }
     if (fs.existsSync(entry.stagedPath)) fs.unlinkSync(entry.stagedPath);
   }
-  restoreDocumentKeyMigrationVault(journal);
+  await restoreDocumentKeyMigrationVault(journal);
   if (fs.existsSync(journalPath)) fs.unlinkSync(journalPath);
 }
 
@@ -1245,7 +1374,7 @@ function finalizeDocumentKeyMigration(migrationId) {
   fs.unlinkSync(journalPath);
 }
 
-function recoverPendingDocumentKeyMigrations() {
+async function recoverPendingDocumentKeyMigrations() {
   const directory = sharedAppDataDir();
   if (!fs.existsSync(directory)) return;
   for (const name of fs.readdirSync(directory)) {
@@ -1260,7 +1389,7 @@ function recoverPendingDocumentKeyMigrations() {
         }
         fs.unlinkSync(journalPath);
       } else {
-        rollbackDocumentKeyMigration(migrationId);
+        await rollbackDocumentKeyMigration(migrationId);
       }
     } catch (error) {
       console.error('Unable to recover document key migration', migrationId, error);
@@ -1340,30 +1469,30 @@ function executePendingIntegrationExtraction(browser) {
     : extraction.context?.expectedOrigin && currentOrigin !== extraction.context.expectedOrigin) return Promise.resolve(null);
   browser.pendingExtraction = null;
   if (extraction.kind === 'command-target') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.start(${JSON.stringify(extraction.inspectionKind === 'parent' ? 'parent' : 'target')}, ${JSON.stringify(integrationInspectorOptions(extraction.options))})`);
   }
   if (extraction.kind === 'command-execution') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.executeCommandAndReport(${JSON.stringify(extraction.payload || {})})`);
   }
   if (extraction.kind === 'ready-check-validation') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.validateReadyChecksAndPublish(${JSON.stringify(extraction.payload?.readyChecks || {})}, ${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'pattern-highlight') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.matchAndHighlight(${JSON.stringify(extraction.pattern || {})})`);
   }
   if (extraction.kind === 'source-discovery') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'source-fetch') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
+    return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(${JSON.stringify(extraction.source || {})}, ${JSON.stringify(extraction.context || {})})`);
   }
   if (extraction.kind === 'webmcp-discovery') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.discover(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+    return runWebMcp(browser.contents, 'discover', extraction.payload).then((result) => receiveIntegrationResult(browser, result));
   }
   if (extraction.kind === 'webmcp-invocation') {
-    return browser.contents.executeJavaScript(`window.__hvyGalaxyWebMcp ? window.__hvyGalaxyWebMcp.invoke(${JSON.stringify(extraction.payload || {})}) : Promise.reject(new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.'))`);
+    return runWebMcp(browser.contents, 'invoke', extraction.payload).then((result) => receiveIntegrationResult(browser, result));
   }
-  return browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
+  return runInIntegrationWorld(browser.contents, `window.__hvyGalaxyInspector?.extractAndPublish(${JSON.stringify(extraction.pattern || {})}, ${JSON.stringify(extraction.context || {})})`);
 }
 
 async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionMode, pendingExtraction, foreground, windowName, integrationId, pageId) {
@@ -1386,13 +1515,6 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         sandbox: true,
       },
     });
-    const toolbarView = new WebContentsView({
-      webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
     const browserView = new WebContentsView({
       webPreferences: {
         partition: `hvy-galaxy-integrations-${profileId}-${Date.now()}`,
@@ -1405,21 +1527,19 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
         backgroundThrottling: false,
       },
     });
-    integrationWindow.contentView.addChildView(browserView);
-    integrationWindow.contentView.addChildView(toolbarView);
-    const layoutBrowserView = () => {
-      const [width, height] = integrationWindow.getContentSize();
-      toolbarView.setBounds({ x: 0, y: 0, width, height: INTEGRATION_TOOLBAR_HEIGHT });
-      browserView.setBounds({ x: 0, y: INTEGRATION_TOOLBAR_HEIGHT, width, height: Math.max(0, height - INTEGRATION_TOOLBAR_HEIGHT) });
-    };
-    layoutBrowserView();
-    integrationWindow.on('resize', layoutBrowserView);
-    browser = { window: integrationWindow, toolbarView, toolbarContents: toolbarView.webContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId };
+    const chrome = attachBrowserChrome(integrationWindow, browserView, {
+      loadToolbar: loadIntegrationToolbar,
+      integration: true,
+      name: () => browser.name,
+      allowedOrigins: () => (browser.allowedOrigins ? [...browser.allowedOrigins] : []),
+      onMessage: (message) => receiveIntegrationToolbarMessage(browser, message),
+    });
+    browser = { window: integrationWindow, chrome, toolbarContents: chrome.toolbarContents, view: browserView, contents: browserView.webContents, name: windowName || profileId, profileId, closeReady: false, closePromise: null, allowedOrigins, actionModePending: false, pendingExtraction: null, integrationId, pageId };
     integrationBrowsers.set(profileId, browser);
     buildMenu();
     const browserUserAgent = browser.contents.getUserAgent()
       .replace(/\sElectron\/[^\s]+/g, '')
-      .replace(/\sHVY(?:[\s-]Galaxy)?\/[^\s]+/gi, '');
+      .replace(/\sHVY(?:[\s-]?Galaxy)?\/[^\s]+/gi, '');
     browser.contents.setUserAgent(browserUserAgent);
     integrationWindow.removeMenu();
     browser.contents.on('before-input-event', (event, input) => {
@@ -1436,87 +1556,11 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       }
       return { action: 'deny' };
     });
-    browser.toolbarContents.on('will-navigate', (event, requestedUrl) => {
-      const toolbarPrefix = 'hvy-integration://toolbar/';
-      if (requestedUrl.startsWith(toolbarPrefix)) {
-        event.preventDefault();
-        mainWindow?.webContents.send('hvy:integration-inspection-result', {
-          kind: 'integration-toolbar-action',
-          action: requestedUrl.slice(toolbarPrefix.length),
-          profileId,
-        });
-        raiseWindow(mainWindow);
-        return;
-      }
-      const browserCommandPrefix = 'hvy-integration://browser/';
-      if (requestedUrl.startsWith(browserCommandPrefix)) {
-        event.preventDefault();
-        const browserCommand = requestedUrl.slice(browserCommandPrefix.length);
-        if (browserCommand === 'back' && browser.contents.canGoBack()) browser.contents.goBack();
-        if (browserCommand === 'forward' && browser.contents.canGoForward()) browser.contents.goForward();
-        if (browserCommand === 'reload') browser.contents.reload();
-        if (browserCommand === 'inspect') {
-          browser.actionModePending = true;
-          browser.contents.executeJavaScript(`${INTEGRATION_INSPECTOR}\nwindow.__hvyGalaxyInspector.start("target", { externalToolbar: true })`);
-        }
-        if (browserCommand === 'close') integrationWindow.close();
-        return;
-      }
-      const inspectorControlPrefix = 'hvy-integration://inspector-control/';
-      if (requestedUrl.startsWith(inspectorControlPrefix)) {
-        event.preventDefault();
-        const control = requestedUrl.slice(inspectorControlPrefix.length);
-        if (['navigate', 'undo', 'done'].includes(control)) {
-          void browser.contents.executeJavaScript(`window.__hvyGalaxyInspector?.control(${JSON.stringify(control)})`);
-        }
-        return;
-      }
-      const navigatePrefix = 'hvy-integration://navigate/';
-      if (requestedUrl.startsWith(navigatePrefix)) {
-        event.preventDefault();
-        const targetUrl = Buffer.from(requestedUrl.slice(navigatePrefix.length), 'base64url').toString('utf8');
-        if (isAllowedIntegrationUrl(targetUrl, browser.allowedOrigins)) void browser.contents.loadURL(targetUrl);
-        else requestIntegrationNavigationApproval(browser, targetUrl, 'address');
-        return;
-      }
-    });
     browser.contents.on('will-navigate', (event, requestedUrl) => {
-      if (requestedUrl === 'hvy-integration://close') {
+      // Galaxy's scripts send what they find out of the page's sight (hvy:integration-page-message), and what the host
+      // reports goes on its own channel (hvy:integration-browser-event): a Galaxy address is nothing the page can send.
+      if (requestedUrl.startsWith('hvy-integration://')) {
         event.preventDefault();
-        integrationWindow.close();
-        return;
-      }
-      const inspectionPrefix = 'hvy-integration://inspection/';
-      if (requestedUrl.startsWith(inspectionPrefix)) {
-        event.preventDefault();
-        const encoded = requestedUrl.slice(inspectionPrefix.length);
-        const result = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-        result.profileId = profileId;
-        browser.actionModePending = false;
-        setIntegrationToolbarInspectionState(browser);
-        mainWindow?.webContents.send('hvy:integration-inspection-result', result);
-        const isBackgroundResult = result?.kind === 'integration-page-readiness'
-          || result?.kind === 'integration-ready-check-validation'
-          || result?.kind === 'integration-record-watch-result'
-          || (result?.kind === 'integration-extraction' && (result?.context?.mode === 'examples' || result?.context?.foreground === false))
-          || (result?.kind === 'integration-source-discovery' && result?.context?.automatic === true)
-          || (String(result?.kind || '').startsWith('integration-webmcp-') && result?.focusMainOnResult !== true);
-        if (!isBackgroundResult) raiseWindow(mainWindow);
-        return;
-      }
-      const toolbarStatePrefix = 'hvy-integration://toolbar-state/';
-      if (requestedUrl.startsWith(toolbarStatePrefix)) {
-        event.preventDefault();
-        const encoded = requestedUrl.slice(toolbarStatePrefix.length);
-        const state = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-        setIntegrationToolbarInspectionState(browser, state);
-        return;
-      }
-      if (requestedUrl === 'hvy-integration://inspection-cancel') {
-        event.preventDefault();
-        browser.actionModePending = false;
-        setIntegrationToolbarInspectionState(browser);
-        raiseWindow(mainWindow);
         return;
       }
       if (isAllowedIntegrationUrl(requestedUrl, browser.allowedOrigins)) return;
@@ -1524,22 +1568,17 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
       requestIntegrationNavigationApproval(browser, requestedUrl, 'main-frame');
     });
     browser.contents.on('did-finish-load', () => {
-      const currentUrl = browser.contents.getURL();
-      void browser.toolbarContents.executeJavaScript(`window.hvySetBrowserState(${JSON.stringify({ url: currentUrl, allowed: browser.allowedOrigins ? [...browser.allowedOrigins] : [] })})`);
-      void browser.contents.executeJavaScript(INTEGRATION_INSPECTOR).then(() => {
-        void browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
-        if (browser.actionModePending) return browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+      void runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR).then(() => {
+        void runInIntegrationWorld(browser.contents, 'window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })');
+        if (browser.actionModePending) return runInIntegrationWorld(browser.contents, browser.inspectionStart || DEFAULT_INSPECTION_START);
         return executePendingIntegrationExtraction(browser);
       });
     });
-    browser.contents.on('page-title-updated', (_event, title) => {
-      const siteTitle = String(title || '').trim();
-      if (siteTitle) integrationWindow.setTitle(siteTitle);
-    });
     integrationWindow.on('closed', () => {
+      // Every close is reported: whatever was waiting on this window ends, not only a selection.
+      mainWindow?.webContents.send('hvy:integration-browser-event', { kind: 'integration-browser-closed', profileId });
       if (browser.actionModePending) {
         browser.actionModePending = false;
-        mainWindow?.webContents.send('hvy:integration-inspection-result', { kind: 'integration-browser-closed', profileId });
         raiseWindow(mainWindow);
       }
       integrationBrowsers.delete(profileId);
@@ -1577,13 +1616,22 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
   browser.integrationId = integrationId;
   browser.pageId = pageId;
   browser.actionModePending = actionMode;
+  if (actionMode) browser.inspectionStart = DEFAULT_INSPECTION_START;
   browser.pendingExtraction = pendingExtraction || null;
-  await browser.toolbarContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(INTEGRATION_TOOLBAR)}`);
+  await browser.chrome.loadToolbar();
   browser.window.removeMenu();
-  if (browser.contents.getURL() === url && !browser.contents.isLoadingMainFrame()) {
-    await browser.contents.executeJavaScript(INTEGRATION_INSPECTOR);
+  const currentUrl = browser.contents.getURL();
+  // A request that asks for the page loaded fresh (`reload`, a site setup's Test) waits for its load either way.
+  const reload = pendingExtraction?.reload === true;
+  // On the page already, or going to another part of it (only the part after # changes): no load comes to start picking
+  // or the extraction waiting for one, so it starts now.
+  if (reload && currentUrl === url) {
+    browser.contents.reload();
+  } else if (!reload && !browser.contents.isLoadingMainFrame() && (currentUrl === url || sameDocumentUrl(currentUrl, url))) {
+    if (currentUrl !== url) await runInIntegrationWorld(browser.contents, `location.assign(${JSON.stringify(url)})`);
+    await runInIntegrationWorld(browser.contents, INTEGRATION_INSPECTOR);
     if (browser.actionModePending) {
-      await browser.contents.executeJavaScript('window.__hvyGalaxyInspector?.start("parent", { primary: true, externalToolbar: true })');
+      await runInIntegrationWorld(browser.contents, browser.inspectionStart || DEFAULT_INSPECTION_START);
     } else {
       await executePendingIntegrationExtraction(browser);
     }
@@ -1591,6 +1639,20 @@ async function openIntegrationBrowserNow(url, profileId, allowedOrigins, actionM
     await browser.contents.loadURL(url);
   }
   if (foreground) raiseWindow(browser.window);
+}
+
+/** Whether going from one address to the other only changes the part after #: the page stays, and no load follows. */
+function sameDocumentUrl(current, next) {
+  try {
+    const before = new URL(current);
+    const after = new URL(next);
+    if (before.hash === after.hash) return false;
+    before.hash = '';
+    after.hash = '';
+    return before.href === after.href;
+  } catch {
+    return false;
+  }
 }
 
 function isAllowedIntegrationUrl(value, allowedOrigins = null) {
@@ -1978,7 +2040,7 @@ async function addFilesToWorkspace(workspacePath, targetDirectory = '') {
   for (const source of result.filePaths) {
     if (!documentExtension(source)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(source).toLowerCase());
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, path.basename(source), 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
@@ -2009,7 +2071,7 @@ function addDroppedFilesToWorkspace(workspacePath, files, targetDirectory = '') 
   for (const file of files || []) {
     if (!documentExtension(file.name)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be added to a workspace.');
     const isTemplate = installsWorkspaceTemplates && TEMPLATE_EXTENSIONS.has(path.extname(file.name).toLowerCase());
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, file.name);
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, file.name, 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     writeBytes(destination, file.bytes);
@@ -2242,12 +2304,12 @@ function createDocumentFile(workspacePath, relativePath, template, bytes) {
   if (!destination.startsWith(path.resolve(workspacePath) + path.sep)) {
     throw new Error('Document path must stay inside the workspace.');
   }
-  if (fs.existsSync(destination)) throw new Error('A document already exists at that path.');
   fs.mkdirSync(path.dirname(destination), { recursive: true });
+  const incoming = claimWorkspaceDestination(workspacePath, path.dirname(destination), path.basename(destination), 'error');
   writeBytes(destination, bytes ?? Buffer.from(template));
   touchWorkspaceManifest(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function createEncryptedFolderDocument(request) {
@@ -2513,12 +2575,12 @@ function renameDocumentFile(filePath, name) {
   const stem = normalizedStem(name);
   const destination = path.join(parent, `${stem}${extension}`);
   if (destination === filePath) return readDocumentAt(filePath);
-  if (fs.existsSync(destination)) throw new Error('A document with that name already exists.');
-  fs.renameSync(filePath, destination);
   const workspacePath = workspaceRootForDocument(parent);
+  const incoming = claimWorkspaceDestination(workspacePath, parent, path.basename(destination), 'error');
+  fs.renameSync(filePath, destination);
   if (workspacePath) renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function archiveDocumentFile(filePath) {
@@ -2581,6 +2643,81 @@ function deleteWorkspaceFolder(request) {
   return loadWorkspaceFromPath(workspacePath);
 }
 
+// Names the app gives meaning to: the workspace's templates folder, and the prefix encrypted folders are stored under.
+function rejectReservedFolderName(workspacePath, parent, name) {
+  const lower = name.toLowerCase();
+  const atRoot = path.resolve(parent) === path.resolve(workspacePath);
+  if ((atRoot && lower === 'templates') || lower.startsWith(ENCRYPTED_FOLDER_PHYSICAL_PREFIX)) {
+    throw new Error(`${name} is a reserved folder name.`);
+  }
+}
+
+function renameWorkspaceFolder(request) {
+  const workspacePath = String(request?.workspacePath || '');
+  ensureWorkspace(workspacePath);
+  const targetDirectory = String(request?.targetDirectory || '').trim().replace(/\\/g, '/');
+  const workspaceRoot = path.resolve(workspacePath);
+  const folderPath = path.resolve(workspaceRoot, targetDirectory);
+  if (!targetDirectory || !folderPath.startsWith(workspaceRoot + path.sep)) {
+    throw new Error('Folder path must stay inside the workspace.');
+  }
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) throw new Error('Folder was not found.');
+  if (folderPath === path.resolve(workspaceTemplatesDir(workspacePath))) throw new Error("The templates folder can't be renamed.");
+  if (fs.existsSync(path.join(folderPath, ENCRYPTED_FOLDER_MANIFEST_FILE))) {
+    throw new Error('Encrypted folders are renamed through their manifest.');
+  }
+  const folderName = normalizedFolderName(request?.name);
+  const parent = path.dirname(folderPath);
+  rejectReservedFolderName(workspacePath, parent, folderName);
+  const nextPath = path.join(parent, folderName);
+  let relocatedFiles = [];
+  if (nextPath !== folderPath) {
+    // A different-case name on a case-insensitive disk resolves to this same folder, which isn't a conflict.
+    if (fs.existsSync(nextPath) && fs.realpathSync.native(nextPath) !== fs.realpathSync.native(folderPath)) {
+      throw new Error(`A file or folder named ${folderName} already exists in this folder.`);
+    }
+    const previousFiles = workspaceDocumentFilesInDirectory(workspacePath, folderPath);
+    fs.renameSync(folderPath, nextPath);
+    relocatedFiles = previousFiles.map((previous) => {
+      const next = path.join(nextPath, path.relative(folderPath, previous));
+      return { previousPath: previous, path: next, name: path.basename(next), extension: documentExtension(next) };
+    });
+    const manifestPath = workspaceManifestPath(workspacePath);
+    if (manifestPath) {
+      const manifest = readJson(manifestPath, null);
+      const previous = relativeWorkspacePath(workspacePath, folderPath);
+      const next = relativeWorkspacePath(workspacePath, nextPath);
+      for (const key of ['archivedFiles', 'lockedFiles', 'hiddenFromAIFolders', 'hiddenFromAIFiles']) {
+        if (!Array.isArray(manifest[key])) continue;
+        manifest[key] = [...new Set(manifest[key].map((entry) => (
+          entry === previous ? next : entry.startsWith(`${previous}/`) ? `${next}${entry.slice(previous.length)}` : entry
+        )))].sort();
+      }
+      manifest.updatedAt = new Date().toISOString();
+      writeJson(manifestPath, manifest);
+    }
+    relocateRecentFiles(relocatedFiles);
+  }
+  addRecentWorkspace(workspacePath);
+  return { workspace: loadWorkspaceFromPath(workspacePath), relocatedFiles };
+}
+
+function relocateRecentFiles(relocations) {
+  if (relocations.length === 0) return;
+  const recent = readJson(dataPath(RECENT_STATE), { workspaces: [], files: [] });
+  for (const { previousPath, path: nextPath } of relocations) {
+    recent.files = (recent.files || []).map((entry) => (entry === previousPath ? nextPath : entry));
+    for (const key of ['documentModes', 'documentColorUses']) {
+      if (recent[key] && previousPath in recent[key]) {
+        recent[key][nextPath] = recent[key][previousPath];
+        delete recent[key][previousPath];
+      }
+    }
+  }
+  writeJson(dataPath(RECENT_STATE), recent);
+  refreshMenu();
+}
+
 function workspaceDocumentFilesInDirectory(workspacePath, directory) {
   if (!fs.existsSync(directory)) return [];
   const files = [];
@@ -2598,19 +2735,20 @@ function workspaceDocumentFilesInDirectory(workspacePath, directory) {
 function saveDocumentToWorkspace(workspacePath, name, bytes, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   const fileName = ensureDocumentFileName(name);
-  const destination = uniqueCopyPath(workspaceTargetDirectory(workspacePath, targetDirectory), fileName);
+  const incoming = claimWorkspaceDestination(workspacePath, workspaceTargetDirectory(workspacePath, targetDirectory), fileName, 'suffix');
+  const destination = incoming.destination;
   writeBytes(destination, bytes);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentMetadataAt(destination);
+  return { ...readDocumentMetadataAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 function copyDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
   if (!documentExtension(filePath)) throw new Error('Only .hvy, .thvy, .phvy, and .md documents can be copied.');
   const targetRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
-  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const incoming = claimWorkspaceDestination(workspacePath, targetRoot, path.basename(filePath), 'suffix');
   const destination = incoming.destination;
   fs.copyFileSync(filePath, destination);
   touchWorkspaceManifest(workspacePath);
@@ -2630,7 +2768,7 @@ function moveDocumentToWorkspace(filePath, workspacePath, targetDirectory = '') 
     addRecentFile(filePath);
     return readDocumentAt(filePath);
   }
-  const incoming = incomingWorkspaceFile(workspacePath, targetRoot, path.basename(filePath));
+  const incoming = claimWorkspaceDestination(workspacePath, targetRoot, path.basename(filePath), 'suffix');
   const destination = incoming.destination;
   fs.renameSync(filePath, destination);
   if (sourceWorkspacePath) {
@@ -2657,33 +2795,31 @@ function convertWorkspaceDocumentKind(filePath, workspacePath, toTemplate) {
   const nextExtension = extension === '.phvy' ? '.phvy' : toTemplate ? '.thvy' : '.hvy';
   const destinationRoot = toTemplate ? workspaceTemplatesDir(workspacePath) : workspacePath;
   fs.mkdirSync(destinationRoot, { recursive: true });
-  const destination = uniqueCopyPath(destinationRoot, `${path.parse(filePath).name}${nextExtension}`);
+  const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, `${path.parse(filePath).name}${nextExtension}`, 'suffix');
+  const destination = incoming.destination;
   fs.renameSync(filePath, destination);
   renameWorkspaceFileManifestEntries(workspacePath, filePath, destination);
   touchWorkspaceManifest(workspacePath);
   addRecentWorkspace(workspacePath);
   addRecentFile(destination);
-  return readDocumentAt(destination);
+  return { ...readDocumentAt(destination), relocatedArchivedFiles: incoming.relocatedArchivedFiles };
 }
 
 async function writeSystemFileClipboard(request) {
   const paths = Array.isArray(request?.paths) ? request.paths : [];
   const files = paths.map((entry) => String(entry)).filter((entry) => entry && documentExtension(entry) && fs.existsSync(entry));
   if (files.length === 0) throw new Error('No supported document files to copy.');
-  if (process.platform !== 'darwin') {
-    throw new Error('System file clipboard is currently supported on macOS only.');
-  }
-  clipboard.clear();
-  clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(macFileListPlist(files), 'utf8'));
-  clipboard.writeText(files.join('\n'));
+  await runFile(rustHelperPath(), ['--write-clipboard-files', ...files], { encoding: 'utf8', windowsHide: true });
+}
+
+async function readClipboardFilePaths() {
+  const { stdout } = await runFile(rustHelperPath(), ['--read-clipboard-files'], { encoding: 'utf8', windowsHide: true });
+  return stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
 }
 
 async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') {
   ensureWorkspace(workspacePath);
-  if (process.platform !== 'darwin') {
-    throw new Error('System file paste is currently supported on macOS only.');
-  }
-  const sourcePaths = readMacClipboardFilePaths();
+  const sourcePaths = await readClipboardFilePaths();
   if (sourcePaths.length === 0) throw new Error('No files are available to paste.');
   const copiedPaths = [];
   const relocatedArchivedFiles = [];
@@ -2691,7 +2827,7 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
     if (!documentExtension(source)) continue;
     if (!fs.existsSync(source) || !fs.statSync(source).isFile()) continue;
     const destinationRoot = workspaceTargetDirectory(workspacePath, targetDirectory);
-    const incoming = incomingWorkspaceFile(workspacePath, destinationRoot, path.basename(source));
+    const incoming = claimWorkspaceDestination(workspacePath, destinationRoot, path.basename(source), 'suffix');
     const destination = incoming.destination;
     relocatedArchivedFiles.push(...incoming.relocatedArchivedFiles);
     fs.copyFileSync(source, destination);
@@ -2708,46 +2844,6 @@ async function pasteSystemFilesToWorkspace(workspacePath, targetDirectory = '') 
     copiedPaths,
     relocatedArchivedFiles,
   };
-}
-
-function macFileListPlist(files) {
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<array>
-${files.map((file) => `  <string>${xmlEscape(file)}</string>`).join('\n')}
-</array>
-</plist>`;
-}
-
-function readMacClipboardFilePaths() {
-  const plist = clipboard.readBuffer('NSFilenamesPboardType').toString('utf8');
-  const paths = Array.from(plist.matchAll(/<string>([\s\S]*?)<\/string>/g))
-    .map((match) => xmlUnescape(match[1]).trim())
-    .filter(Boolean);
-  if (paths.length > 0) return paths;
-  return clipboard.readText()
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.startsWith('/'));
-}
-
-function xmlEscape(value) {
-  return String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function xmlUnescape(value) {
-  return String(value)
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&gt;/g, '>')
-    .replace(/&lt;/g, '<')
-    .replace(/&amp;/g, '&');
 }
 
 function createDocumentBackup(request) {
@@ -3055,6 +3151,7 @@ function createWorkspaceFolder(request) {
       throw new Error('Encrypted folder manifest does not match the folder identity.');
     }
   }
+  if (!encrypted) rejectReservedFolderName(workspacePath, parent, folderName);
   const folderPath = path.join(parent, encrypted ? encryptedFolderPhysicalName(folderId) : folderName);
   const workspaceRoot = path.resolve(workspacePath);
   const resolved = path.resolve(folderPath);
@@ -3400,14 +3497,15 @@ function uniqueCopyPath(root, fileName) {
   return candidate;
 }
 
-function incomingWorkspaceFile(workspacePath, root, fileName) {
+// liveConflict: 'suffix' gives the incoming file a "name 2" path when a non-archived file holds the name;
+// 'error' rejects it. Archived occupants are always moved aside so the incoming file keeps the name.
+function claimWorkspaceDestination(workspacePath, root, fileName, liveConflict) {
   const destination = path.join(root, fileName);
   if (!fs.existsSync(destination)) return { destination, relocatedArchivedFiles: [] };
-  const manifestPath = workspaceManifestPath(workspacePath);
-  if (!manifestPath) return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
-  const manifest = readJson(manifestPath, null);
-  const relative = relativeWorkspacePath(workspacePath, destination);
-  if (!manifest?.archivedFiles?.includes(relative)) {
+  const manifestPath = workspacePath ? workspaceManifestPath(workspacePath) : null;
+  const manifest = manifestPath ? readJson(manifestPath, null) : null;
+  if (!manifest?.archivedFiles?.includes(relativeWorkspacePath(workspacePath, destination))) {
+    if (liveConflict === 'error') throw new Error('A document with that name already exists.');
     return { destination: uniqueCopyPath(root, fileName), relocatedArchivedFiles: [] };
   }
   const archivedDestination = uniqueCopyPath(root, fileName);
@@ -3544,11 +3642,6 @@ function removeRecentFile(entryPath) {
   refreshMenu();
 }
 
-function pushRecent(entries, entryPath) {
-  const normalized = path.resolve(entryPath);
-  return [normalized, ...entries.filter((entry) => path.resolve(entry) !== normalized)].slice(0, RECENT_LIMIT);
-}
-
 function recentWorkspacePaths(recent) {
   return recent.recentWorkspaces || recent.workspaces || [];
 }
@@ -3604,6 +3697,13 @@ function defaultAppSettings() {
     webCapabilityProfileBindings: {},
     webCapabilityAuthorizations: {},
     integrationWebMcpApprovals: {},
+    webServiceApprovals: {},
+    // Validated by the renderer's normalizeCollectionWorkerLimits.
+    webCollectionLimits: { perSite: 2, total: 4, apiCalls: 4, queueJobs: 2 },
+    // Validated by the renderer's normalizeScheduledDocuments.
+    scheduledDocuments: {},
+    // Validated by the renderer's normalizeScheduledJobsAtOnce.
+    scheduledJobsAtOnce: 1,
   };
 }
 
@@ -3623,6 +3723,10 @@ function normalizeAppSettings(settings) {
     webCapabilityProfileBindings: normalizeNestedStringMap(settings?.webCapabilityProfileBindings),
     webCapabilityAuthorizations: normalizeWebCapabilityAuthorizations(settings?.webCapabilityAuthorizations),
     integrationWebMcpApprovals: normalizeIntegrationWebMcpApprovals(settings?.integrationWebMcpApprovals),
+    // Validated by the renderer's normalizeCapabilityAuthorizations; kept as stored here, like Tauri does.
+    webServiceApprovals: settings?.webServiceApprovals && typeof settings.webServiceApprovals === 'object' && !Array.isArray(settings.webServiceApprovals)
+      ? settings.webServiceApprovals
+      : {},
   };
 }
 

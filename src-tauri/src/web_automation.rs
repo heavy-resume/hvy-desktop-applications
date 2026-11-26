@@ -1,0 +1,467 @@
+// Tauri side of web automation's BrowserHost (src/webAutomation/host.ts), the
+// counterpart of src-electron/web-automation-host.cjs: hidden worker windows
+// that share a browser profile's session, the visible sign-in window, page
+// inspection through the integration inspector, page commands, same-origin
+// requests from inside a page, and cookie-free file reads. What runs inside a
+// page is shared with Electron (src/web-automation-page.js).
+//
+// Webviews here return only synchronous values from scripts, so a page call is
+// started in the page and its result read back by polling (`start` and `take`
+// in the page script). Navigation is followed through page load events.
+
+const WEB_AUTOMATION_PAGE: &str = include_str!("../../src/web-automation-page.js");
+const WEB_AUTOMATION_NAVIGATION_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+const WEB_AUTOMATION_CALL_TIMEOUT: StdDuration = StdDuration::from_secs(120);
+const WEB_AUTOMATION_POLL_INTERVAL: StdDuration = StdDuration::from_millis(50);
+/// How long a command has to start a navigation (a link's click starts one at once) before it is taken not to.
+const WEB_AUTOMATION_NAVIGATION_GRACE: StdDuration = StdDuration::from_millis(1000);
+/// A finished page is settled once no other load starts this soon. Going back, WebKit finishes the history entry
+/// and then loads the page again; a page may also send itself on as soon as it loads.
+const WEB_AUTOMATION_SETTLE: StdDuration = StdDuration::from_millis(300);
+
+/// Page loads in one window, counted as they start and finish, so a caller can wait for the next one.
+#[derive(Default)]
+struct WebAutomationPageLoads {
+    counts: Mutex<(u64, u64)>,
+    changed: std::sync::Condvar,
+}
+
+impl WebAutomationPageLoads {
+    fn record(&self, finished: bool) {
+        if let Ok(mut counts) = self.counts.lock() {
+            if finished { counts.1 += 1; } else { counts.0 += 1; }
+        }
+        self.changed.notify_all();
+    }
+
+    fn counts(&self) -> (u64, u64) {
+        self.counts.lock().map(|counts| *counts).unwrap_or_default()
+    }
+
+    /// Waits until a load finishes after `finished_before` and the page settles; with a grace, first until one starts
+    /// after `started_before` (none starting is no navigation).
+    fn wait(&self, started_before: u64, finished_before: u64, grace: Option<StdDuration>) -> AppResult<()> {
+        let mut counts = self.counts.lock().map_err(|error| AppError::Message(error.to_string()))?;
+        if let Some(grace) = grace {
+            let (next, timeout) = self.changed.wait_timeout_while(counts, grace, |counts| counts.0 <= started_before)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            counts = next;
+            if timeout.timed_out() { return Ok(()); }
+        }
+        let mut finished_before = finished_before;
+        loop {
+            let (next, timeout) = self.changed.wait_timeout_while(counts, WEB_AUTOMATION_NAVIGATION_TIMEOUT, |counts| counts.1 <= finished_before)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            if timeout.timed_out() { return Err(AppError::Message("The page did not finish loading.".into())); }
+            let started = next.0;
+            let (next, quiet) = self.changed.wait_timeout_while(next, WEB_AUTOMATION_SETTLE, |counts| counts.0 == started)
+                .map_err(|error| AppError::Message(error.to_string()))?;
+            if quiet.timed_out() { return Ok(()); }
+            finished_before = next.1;
+            counts = next;
+        }
+    }
+}
+
+/// What a worker's page asked to open in a new tab or window since its last command, for `take-opened-window`.
+type WebAutomationOpened = Arc<Mutex<Vec<tauri::Url>>>;
+
+struct WebAutomationWorker {
+    label: String,
+    profile_id: String,
+    browser_store_id: String,
+    loads: Arc<WebAutomationPageLoads>,
+    opened: WebAutomationOpened,
+}
+
+static WEB_AUTOMATION_WORKERS: OnceLock<Mutex<HashMap<String, WebAutomationWorker>>> = OnceLock::new();
+static WEB_AUTOMATION_NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn web_automation_next_id() -> u64 {
+    WEB_AUTOMATION_NEXT_ID.fetch_add(1, Ordering::SeqCst)
+}
+
+fn web_automation_workers() -> AppResult<std::sync::MutexGuard<'static, HashMap<String, WebAutomationWorker>>> {
+    WEB_AUTOMATION_WORKERS.get_or_init(|| Mutex::new(HashMap::new())).lock().map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn web_automation_profile_label(profile_id: &str) -> String {
+    profile_id.chars().filter(|character| character.is_ascii_alphanumeric() || *character == '-').collect()
+}
+
+/// A profile's windows share its browser store with the integration browser (its `browserStoreId`), so what was done in
+/// either (a sign-in, a check that you're human passed, cookies accepted) holds in both. `opened` keeps what a worker's
+/// page asks to open in a new tab or window; without it (the sign-in window), that opens in the window itself.
+/// The sign-in window's: its toolbar (browser_chrome.rs), and the profile's name for its Site information.
+#[derive(Clone)]
+struct WebAutomationSignIn {
+    chrome: BrowserChrome,
+    profile_name: String,
+}
+
+/// The window a page (labelled `label`) is shown in: the page's label with this after it.
+fn web_automation_window_label(label: &str) -> String {
+    format!("{label}-window")
+}
+
+/// A page in a window of its own, labelled `label` (its window, `web_automation_window_label`). The page is added to the
+/// window as a child webview, as the integration browser's is. Workers are made for each job (a fresh window clears its
+/// history), so on macOS a hidden one must not bring Galaxy to the front from whatever the user is doing elsewhere: wry
+/// activates the app for a new webview only when it is visible and focused (wry 0.57.1 on; before that, every new
+/// webview did, child webviews too, and a scheduled job's worker took the front), so the worker is made unfocused while
+/// hidden. A hidden worker never takes focus; showing one focuses it then.
+fn web_automation_window(app: &AppHandle, label: &str, profile_id: &str, browser_store_id: &str, visible: bool, loads: Arc<WebAutomationPageLoads>, user: Option<WebAutomationSignIn>, opened: Option<WebAutomationOpened>) -> AppResult<tauri::Webview> {
+    let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
+    let event_app = app.clone();
+    let event_profile_id = profile_id.to_string();
+    let opener_app = app.clone();
+    let opener_user = user.clone();
+    let window = tauri::window::WindowBuilder::new(app, web_automation_window_label(label))
+        .title("HVY Galaxy")
+        .visible(visible)
+        .focused(visible)
+        .inner_size(1180.0, 820.0)
+        .build()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let builder = tauri::webview::WebviewBuilder::new(label, tauri::WebviewUrl::External(blank))
+        .auto_resize()
+        .focused(visible)
+        .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
+        // The inspector reports some results by navigating to hvy-integration:// URLs; workers read return values instead.
+        .on_navigation(|url| !url.as_str().starts_with("hvy-integration://"))
+        // What a page opens in a new tab or window (a list whose rows open their item with window.open, a link with
+        // target="_blank"): a worker's is kept for `take-opened-window`, its page left as it is. The sign-in window's
+        // opens as a real pop-up (a "Sign in with Google" button's account picker), so it can answer the page.
+        .on_new_window(move |url, features| {
+            if url.scheme() == "https" || url.scheme() == "http" {
+                if let Some(opened) = &opened {
+                    if let Ok(mut opened) = opened.lock() { opened.push(url); }
+                } else if let Some(user) = &opener_user {
+                    if let Ok(window) = web_automation_popup(&opener_app, features, user.profile_name.clone()) {
+                        return tauri::webview::NewWindowResponse::Create { window };
+                    }
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_page_load(move |_, payload| {
+            let finished = payload.event() == tauri::webview::PageLoadEvent::Finished;
+            loads.record(finished);
+            // The sign-in window's navigations report back, once each as in Electron, so the renderer sees sign-in
+            // complete; and its toolbar follows them.
+            if let Some(user) = &user {
+                user.chrome.page_loaded(&event_app, payload.url(), finished);
+                if finished {
+                    let _ = event_app.emit("web-automation-navigation", serde_json::json!({ "profileId": event_profile_id, "window": "user", "url": payload.url().as_str() }));
+                }
+            }
+        });
+    #[cfg(target_os = "macos")]
+    let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id)?);
+    #[cfg(not(target_os = "macos"))]
+    let _ = browser_store_id;
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.data_directory(app.path().app_local_data_dir().map_err(|error| AppError::Message(error.to_string()))?
+        .join("web-automation").join(web_automation_profile_label(profile_id)));
+    let size = window.inner_size().map_err(|error| AppError::Message(error.to_string()))?;
+    window.add_child(builder, tauri::PhysicalPosition::new(0, 0), size).map_err(|error| AppError::Message(error.to_string()))
+}
+
+/// A pop-up the sign-in window's page opens, in a window of its own under a plain browser's toolbar. WebKit gives it the
+/// opener's configuration (`features`), its data store too, so it shares the profile's cookies and can answer its
+/// opener. Made on the main thread, where WebKit asks for it; the toolbar is added after, off it, as adding a webview
+/// waits on the main thread. Its own pop-ups open the same way.
+fn web_automation_popup(app: &AppHandle, features: tauri::webview::NewWindowFeatures, profile_name: String) -> AppResult<tauri::WebviewWindow> {
+    let label = format!("web-automation-popup-{}", web_automation_next_id());
+    let chrome = BrowserChrome::plain(&label);
+    let blank = tauri::Url::parse("about:blank").map_err(|error| AppError::Message(error.to_string()))?;
+    let popup_app = app.clone();
+    let popup_profile_name = profile_name.clone();
+    let load_app = app.clone();
+    let load_chrome = chrome.clone();
+    let window = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::External(blank))
+        .window_features(features)
+        .title("HVY Galaxy")
+        .on_document_title_changed(|window, title| {
+            let title = title.trim();
+            if !title.is_empty() { let _ = window.set_title(title); }
+        })
+        .on_new_window(move |url, features| {
+            if url.scheme() == "https" || url.scheme() == "http" {
+                if let Ok(window) = web_automation_popup(&popup_app, features, popup_profile_name.clone()) {
+                    return tauri::webview::NewWindowResponse::Create { window };
+                }
+            }
+            tauri::webview::NewWindowResponse::Deny
+        })
+        .on_page_load(move |_, payload| load_chrome.page_loaded(&load_app, payload.url(), payload.event() == tauri::webview::PageLoadEvent::Finished))
+        .build()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let attach_app = app.clone();
+    let attach_window = window.clone();
+    tauri::async_runtime::spawn(async move {
+        let host = attach_window.as_ref().window();
+        // Taller by the toolbar, so the page keeps the size it asked for.
+        if let (Ok(scale), Ok(size)) = (host.scale_factor(), host.inner_size()) {
+            let size = size.to_logical::<f64>(scale);
+            let _ = host.set_size(tauri::LogicalSize::new(size.width, size.height + INTEGRATION_TOOLBAR_HEIGHT + INTEGRATION_TOOLBAR_WINDOW_INSET));
+        }
+        let _ = attach_browser_chrome(&attach_app, &host, attach_window.as_ref(), &chrome, BrowserChromeOptions { integration: false, profile_name, on_message: None });
+        // Closed once its page closes itself, as Google's account picker does once it has answered.
+        let _ = close_window_when_page_closes(attach_window.as_ref(), host);
+    });
+    Ok(window)
+}
+
+fn web_automation_worker(app: &AppHandle, worker_id: &str) -> AppResult<(tauri::Webview, Arc<WebAutomationPageLoads>)> {
+    let workers = web_automation_workers()?;
+    let worker = workers.get(worker_id).ok_or_else(|| AppError::Message(format!("Unknown worker {worker_id}.")))?;
+    let window = app.get_webview(&worker.label).ok_or_else(|| AppError::Message(format!("Unknown worker {worker_id}.")))?;
+    Ok((window, worker.loads.clone()))
+}
+
+fn web_automation_create_worker(app: &AppHandle, worker_id: &str, profile_id: &str, browser_store_id: &str) -> AppResult<()> {
+    let loads = Arc::new(WebAutomationPageLoads::default());
+    let opened = WebAutomationOpened::default();
+    let label = format!("web-automation-worker-{}", web_automation_next_id());
+    web_automation_window(app, &label, profile_id, browser_store_id, false, loads.clone(), None, Some(opened.clone()))?;
+    web_automation_workers()?.insert(worker_id.into(), WebAutomationWorker { label, profile_id: profile_id.into(), browser_store_id: browser_store_id.into(), loads, opened });
+    Ok(())
+}
+
+/// What a worker's page last asked to open in a new tab since its last command, taken (the rest let go): its profile
+/// and browser store, and the address.
+fn web_automation_take_opened(worker_id: &str) -> AppResult<Option<(String, String, tauri::Url)>> {
+    let workers = web_automation_workers()?;
+    let worker = workers.get(worker_id).ok_or_else(|| AppError::Message(format!("Unknown worker {worker_id}.")))?;
+    let mut opened = worker.opened.lock().map_err(|error| AppError::Message(error.to_string()))?;
+    let url = opened.pop();
+    opened.clear();
+    Ok(url.map(|url| (worker.profile_id.clone(), worker.browser_store_id.clone(), url)))
+}
+
+/// Closes a worker; its profile and browser store, for a worker made again in its place.
+fn web_automation_close_worker(app: &AppHandle, worker_id: &str) -> AppResult<Option<(String, String)>> {
+    let worker = web_automation_workers()?.remove(worker_id);
+    let Some(worker) = worker else { return Ok(None) };
+    if let Some(window) = app.get_window(&web_automation_window_label(&worker.label)) {
+        window.destroy().map_err(|error| AppError::Message(error.to_string()))?;
+    }
+    Ok(Some((worker.profile_id, worker.browser_store_id)))
+}
+
+/// Evaluates an expression where Galaxy's scripts run in the page (integration_world.rs) and returns its (synchronous)
+/// result, as JSON.
+fn web_automation_eval(window: &tauri::Webview, script: String) -> AppResult<Option<serde_json::Value>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    integration_world::eval_with_callback(window, script, move |result| { let _ = sender.send(result); })
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    // No answer while the page is navigating: the caller tries again.
+    match receiver.recv_timeout(StdDuration::from_secs(5)) {
+        Ok(result) => Ok(serde_json::from_str(&result).ok()),
+        Err(_) => Ok(None),
+    }
+}
+
+enum WebAutomationPageResult {
+    Value(serde_json::Value),
+    /// The page went away before the call finished (a command that navigates).
+    Navigated,
+}
+
+/// Calls a function of the shared page script, after the inspector it uses, and waits for its result.
+fn web_automation_page_call(window: &tauri::Webview, name: &str, argument: &serde_json::Value) -> AppResult<WebAutomationPageResult> {
+    let call_id = format!("call-{}", web_automation_next_id());
+    integration_world::eval(window, format!("{INTEGRATION_INSPECTOR}\n{WEB_AUTOMATION_PAGE}\nwindow.__hvyGalaxyAutomation.start({call_id:?}, {name:?}, {argument});"))
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let started = std::time::Instant::now();
+    while started.elapsed() < WEB_AUTOMATION_CALL_TIMEOUT {
+        let taken = web_automation_eval(window, format!("window.__hvyGalaxyAutomation ? window.__hvyGalaxyAutomation.take({call_id:?}) : 'unknown'"))?;
+        match taken {
+            Some(serde_json::Value::String(text)) if text == "unknown" => return Ok(WebAutomationPageResult::Navigated),
+            Some(serde_json::Value::String(text)) => {
+                let result: serde_json::Value = serde_json::from_str(&text)?;
+                if let Some(error) = result.get("error").and_then(serde_json::Value::as_str) {
+                    return Err(AppError::Message(error.into()));
+                }
+                return Ok(WebAutomationPageResult::Value(result.get("value").cloned().unwrap_or(serde_json::Value::Null)));
+            }
+            _ => std::thread::sleep(WEB_AUTOMATION_POLL_INTERVAL),
+        }
+    }
+    Err(AppError::Message(format!("The page did not answer {name} in time.")))
+}
+
+/// Where the window is. A window that has loaded nothing has no URL to ask for (wry panics on it).
+fn web_automation_location(window: &tauri::Webview, loads: &WebAutomationPageLoads) -> AppResult<serde_json::Value> {
+    if loads.counts().1 == 0 { return Ok(serde_json::json!({ "url": "about:blank" })); }
+    Ok(serde_json::json!({ "url": window.url().map_err(|error| AppError::Message(error.to_string()))?.as_str() }))
+}
+
+fn web_automation_url(args: &serde_json::Value, key: &str) -> AppResult<tauri::Url> {
+    args.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().parse::<tauri::Url>()
+        .map_err(|error| AppError::Message(error.to_string()))
+}
+
+fn web_automation_text<'a>(args: &'a serde_json::Value, key: &str) -> AppResult<&'a str> {
+    args.get(key).and_then(serde_json::Value::as_str).ok_or_else(|| AppError::Message(format!("Missing {key}.")))
+}
+
+fn web_automation_user_label(profile_id: &str) -> String {
+    format!("web-automation-user-{}", web_automation_profile_label(profile_id))
+}
+
+/// The host commands that wait on pages: run off the async runtime, since they block until the page answers.
+fn web_automation_page_command(app: &AppHandle, command: &str, args: &serde_json::Value) -> AppResult<serde_json::Value> {
+    match command {
+        "create-worker" => {
+            let worker_id = format!("worker-{}", web_automation_next_id());
+            web_automation_create_worker(app, &worker_id, web_automation_text(args, "profileId")?, web_automation_text(args, "browserStoreId")?)?;
+            Ok(serde_json::Value::String(worker_id))
+        }
+        // What the worker's page last asked to open in a new tab, opened in a worker of its own and loaded there.
+        "take-opened-window" => {
+            let Some((profile_id, browser_store_id, url)) = web_automation_take_opened(web_automation_text(args, "workerId")?)? else {
+                return Ok(serde_json::Value::Null);
+            };
+            let worker_id = format!("worker-{}", web_automation_next_id());
+            web_automation_create_worker(app, &worker_id, &profile_id, &browser_store_id)?;
+            match web_automation_page_command(app, "navigate", &serde_json::json!({ "workerId": worker_id, "url": url.as_str() })) {
+                Ok(location) => Ok(serde_json::json!({ "workerId": worker_id, "url": location["url"] })),
+                // Not loaded, it is nobody's to close.
+                Err(error) => {
+                    web_automation_close_worker(app, &worker_id)?;
+                    Err(error)
+                }
+            }
+        }
+        "close-worker" => {
+            web_automation_close_worker(app, web_automation_text(args, "workerId")?)?;
+            Ok(serde_json::Value::Null)
+        }
+        "show-worker" => {
+            let (page, _) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
+            let window = page.window();
+            window.show().map_err(|error| AppError::Message(error.to_string()))?;
+            window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+            Ok(serde_json::Value::Null)
+        }
+        "hide-worker" => {
+            let (page, _) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
+            page.window().hide().map_err(|error| AppError::Message(error.to_string()))?;
+            Ok(serde_json::Value::Null)
+        }
+        "navigate" => {
+            let (window, loads) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
+            let (_, finished) = loads.counts();
+            let before = web_automation_location(&window, &loads)?;
+            let url = web_automation_url(args, "url")?;
+            // The page now is marked: a load replaces it, so the mark still there after is a load that failed. The address
+            // alone can't tell: a site that rewrites its address shows the same one after loading it again.
+            let marker = format!("navigation-{}", web_automation_next_id());
+            let marked = finished > 0 && matches!(web_automation_eval(&window, format!("window.__hvyGalaxyNavigation = {marker:?}; true"))?, Some(serde_json::Value::Bool(true)));
+            window.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            loads.wait(0, finished, None)?;
+            // A page that fails to load still finishes, leaving the window where it was, its page still marked.
+            let after = web_automation_location(&window, &loads)?;
+            let stayed = marked && matches!(web_automation_eval(&window, format!("window.__hvyGalaxyNavigation === {marker:?}"))?, Some(serde_json::Value::Bool(true)));
+            if after == before && after["url"].as_str() != Some(url.as_str()) && (stayed || !marked) {
+                return Err(AppError::Message(format!("The page failed to load: {url}")));
+            }
+            Ok(after)
+        }
+        "back" => {
+            let (window, loads) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
+            let (started, finished) = loads.counts();
+            integration_world::eval(&window, "window.history.back()").map_err(|error| AppError::Message(error.to_string()))?;
+            // With no page to go back to, nothing loads.
+            loads.wait(started, finished, Some(WEB_AUTOMATION_NAVIGATION_GRACE))?;
+            web_automation_location(&window, &loads)
+        }
+        "inspect" | "request" => {
+            let (window, _) = web_automation_worker(app, web_automation_text(args, "workerId")?)?;
+            let argument = args.get("request").cloned().unwrap_or(serde_json::Value::Null);
+            match web_automation_page_call(&window, command, &argument)? {
+                WebAutomationPageResult::Value(value) => Ok(value),
+                WebAutomationPageResult::Navigated => Err(AppError::Message("The page changed before it answered.".into())),
+            }
+        }
+        // A page command (such as Next) or an item command; waits for the page it opens, if any.
+        "run-command" => {
+            let worker_id = web_automation_text(args, "workerId")?;
+            let (window, loads) = web_automation_worker(app, worker_id)?;
+            web_automation_take_opened(worker_id)?;
+            let (started, finished) = loads.counts();
+            let payload = args.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+            let result = match web_automation_page_call(&window, "runCommand", &payload)? {
+                WebAutomationPageResult::Value(value) => value,
+                // The page it left was the command's doing: it ran.
+                WebAutomationPageResult::Navigated => serde_json::json!({ "status": "executed" }),
+            };
+            loads.wait(started, finished, Some(WEB_AUTOMATION_NAVIGATION_GRACE))?;
+            Ok(result)
+        }
+        // The site's own sign-in page, shown to the user under a browser's toolbar (browser_chrome.rs): its address, and
+        // its site's information. With the toolbar beside it, its window holds two webviews, so it is found by its page.
+        "open-user-window" => {
+            let profile_id = web_automation_text(args, "profileId")?;
+            let label = web_automation_user_label(profile_id);
+            let page = match app.get_webview(&label) {
+                Some(page) => page,
+                None => {
+                    let profile_name = args.get("profileName").and_then(serde_json::Value::as_str).unwrap_or(profile_id).to_string();
+                    let chrome = BrowserChrome::plain(&label);
+                    let user = WebAutomationSignIn { chrome: chrome.clone(), profile_name: profile_name.clone() };
+                    let page = web_automation_window(app, &label, profile_id, web_automation_text(args, "browserStoreId")?, true, Arc::new(WebAutomationPageLoads::default()), Some(user), None)?;
+                    attach_browser_chrome(app, &page.window(), &page, &chrome, BrowserChromeOptions { integration: false, profile_name, on_message: None })?;
+                    page
+                }
+            };
+            page.navigate(web_automation_url(args, "url")?).map_err(|error| AppError::Message(error.to_string()))?;
+            let window = page.window();
+            window.show().map_err(|error| AppError::Message(error.to_string()))?;
+            window.set_focus().map_err(|error| AppError::Message(error.to_string()))?;
+            Ok(serde_json::Value::Null)
+        }
+        "hide-user-window" => {
+            if let Some(window) = app.get_window(&web_automation_window_label(&web_automation_user_label(web_automation_text(args, "profileId")?))) {
+                window.close().map_err(|error| AppError::Message(error.to_string()))?;
+            }
+            Ok(serde_json::Value::Null)
+        }
+        _ => Err(AppError::Message(format!("Unknown web automation host command {command}."))),
+    }
+}
+
+/// A served document's file, read into memory outside any page: no cookies, no redirects (a redirect is an error), no
+/// referrer, no cache.
+async fn web_automation_fetch_file(url: &str, max_bytes: u64) -> AppResult<serde_json::Value> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    let mut response = client.get(url).header("Cache-Control", "no-store").send().await
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(AppError::Message(format!("Reading the file returned {}.", response.status().as_u16())));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| AppError::Message(error.to_string()))? {
+        bytes.extend_from_slice(&chunk);
+        if bytes.len() as u64 > max_bytes {
+            return Err(AppError::Message(format!("The file is larger than {max_bytes} bytes.")));
+        }
+    }
+    Ok(serde_json::Value::Array(bytes.into_iter().map(serde_json::Value::from).collect()))
+}
+
+#[tauri::command]
+async fn web_automation_host(app: AppHandle, command: String, args: serde_json::Value) -> AppResult<serde_json::Value> {
+    if command == "fetch-file" {
+        let max_bytes = args.get("maxBytes").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        return web_automation_fetch_file(web_automation_text(&args, "url")?, max_bytes).await;
+    }
+    tauri::async_runtime::spawn_blocking(move || web_automation_page_command(&app, &command, &args))
+        .await
+        .map_err(|error| AppError::Message(error.to_string()))?
+}

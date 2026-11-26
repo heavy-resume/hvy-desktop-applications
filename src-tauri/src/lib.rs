@@ -20,6 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 
 mod mcp;
+mod integration_world;
 #[cfg(target_os = "macos")]
 mod macos_three_finger_swipe;
 
@@ -209,6 +210,9 @@ include!("app_runtime.rs");
 include!("workspace_files.rs");
 include!("state_settings.rs");
 include!("utils.rs");
+include!("web_automation.rs");
+include!("site_security.rs");
+include!("browser_chrome.rs");
 
 #[cfg(test)]
 mod tests {

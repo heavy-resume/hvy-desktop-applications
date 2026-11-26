@@ -104,8 +104,9 @@ export interface WebCapabilityAuthorizationRecord {
   authorizedAt: string;
 }
 
-export type WebCapabilityProfileBindings = Record<string, Record<string, string>>;
-export type WebCapabilityAuthorizations = Record<string, Record<string, WebCapabilityAuthorizationRecord>>;
+/** By file: its reference in memory, its path where saved (app settings). */
+export type WebCapabilityProfileBindings<K extends string> = Record<K, Record<string, string>>;
+export type WebCapabilityAuthorizations<K extends string> = Record<K, Record<string, WebCapabilityAuthorizationRecord>>;
 
 export type WebCapabilityAuthorizationReason =
   | 'first-use'
@@ -123,7 +124,7 @@ export interface WebCapabilityAuthorizationReview {
   existing: WebCapabilityAuthorizationRecord | null;
 }
 
-export function normalizeWebCapabilityProfileBindings(value: unknown): WebCapabilityProfileBindings {
+export function normalizeWebCapabilityProfileBindings(value: unknown): WebCapabilityProfileBindings<string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).flatMap(([documentPath, bindings]) => {
     const path = documentPath.trim();
@@ -138,7 +139,7 @@ export function normalizeWebCapabilityProfileBindings(value: unknown): WebCapabi
   }));
 }
 
-export function normalizeWebCapabilityAuthorizations(value: unknown): WebCapabilityAuthorizations {
+export function normalizeWebCapabilityAuthorizations(value: unknown): WebCapabilityAuthorizations<string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>).flatMap(([documentPath, authorizations]) => {
     const path = documentPath.trim();
@@ -618,7 +619,7 @@ function canonicalCapabilityValue(config: WebCapabilityConfig): JsonObject {
   };
 }
 
-function stableJson(value: unknown): string {
+export function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (value && typeof value === 'object') {
     return `{${Object.entries(value as Record<string, unknown>)
@@ -634,27 +635,23 @@ export function webCapabilityHash(config: WebCapabilityConfig): string {
   return `web-sha256-${bytesToHex(sha256(new TextEncoder().encode(stableJson(canonicalCapabilityValue(config)))))}`;
 }
 
-export function webCapabilityBindingKey(documentPath: string): string {
-  return documentPath.trim();
-}
-
-export function getWebCapabilityProfileBinding(
-  bindings: WebCapabilityProfileBindings,
-  documentPath: string,
+export function getWebCapabilityProfileBinding<K extends string>(
+  bindings: WebCapabilityProfileBindings<K>,
+  file: NoInfer<K>,
   capabilityId: string,
 ): string | null {
-  return bindings[webCapabilityBindingKey(documentPath)]?.[capabilityId] ?? null;
+  return bindings[file]?.[capabilityId] ?? null;
 }
 
-export function setWebCapabilityProfileBinding(
-  bindings: WebCapabilityProfileBindings,
-  documentPath: string,
+export function setWebCapabilityProfileBinding<K extends string>(
+  bindings: WebCapabilityProfileBindings<K>,
+  file: NoInfer<K>,
   capabilityId: string,
   profileId: string | null,
-): WebCapabilityProfileBindings {
-  const key = webCapabilityBindingKey(documentPath);
+): WebCapabilityProfileBindings<K> {
+  const key = file;
   if (!key) return bindings;
-  const nextForDocument = { ...(bindings[key] ?? {}) };
+  const nextForDocument: Record<string, string> = { ...(bindings[key] ?? {}) };
   if (profileId) nextForDocument[capabilityId] = profileId;
   else delete nextForDocument[capabilityId];
   const next = { ...bindings };
@@ -663,15 +660,15 @@ export function setWebCapabilityProfileBinding(
   return next;
 }
 
-export function reviewWebCapabilityAuthorization(
-  authorizations: WebCapabilityAuthorizations,
-  documentPath: string,
+export function reviewWebCapabilityAuthorization<K extends string>(
+  authorizations: WebCapabilityAuthorizations<K>,
+  file: NoInfer<K>,
   config: WebCapabilityConfig,
   profileId: string,
 ): WebCapabilityAuthorizationReview {
   const currentHash = webCapabilityHash(config);
   const currentSummary = webCapabilityApprovalSummary(config);
-  const existing = authorizations[webCapabilityBindingKey(documentPath)]?.[config.capabilityId] ?? null;
+  const existing = authorizations[file]?.[config.capabilityId] ?? null;
   if (!existing) {
     return { reason: 'first-use', changedCategories: [], currentHash, currentSummary, existing: null };
   }
@@ -692,23 +689,23 @@ export function reviewWebCapabilityAuthorization(
   return { reason: 'capability-changed', changedCategories, currentHash, currentSummary, existing };
 }
 
-export function isWebCapabilityAuthorized(
-  authorizations: WebCapabilityAuthorizations,
-  documentPath: string,
+export function isWebCapabilityAuthorized<K extends string>(
+  authorizations: WebCapabilityAuthorizations<K>,
+  file: NoInfer<K>,
   config: WebCapabilityConfig,
   profileId: string,
 ): boolean {
-  const existing = authorizations[webCapabilityBindingKey(documentPath)]?.[config.capabilityId];
+  const existing = authorizations[file]?.[config.capabilityId];
   return Boolean(existing && existing.profileId === profileId && existing.capabilityHash === webCapabilityHash(config));
 }
 
-export function authorizeWebCapabilityRecord(
-  authorizations: WebCapabilityAuthorizations,
-  documentPath: string,
+export function authorizeWebCapabilityRecord<K extends string>(
+  authorizations: WebCapabilityAuthorizations<K>,
+  file: NoInfer<K>,
   config: WebCapabilityConfig,
   profileId: string,
-): WebCapabilityAuthorizations {
-  const key = webCapabilityBindingKey(documentPath);
+): WebCapabilityAuthorizations<K> {
+  const key = file;
   if (!key) return authorizations;
   return {
     ...authorizations,

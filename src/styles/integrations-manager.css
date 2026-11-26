@@ -803,3 +803,255 @@
   align-items: center;
   gap: 8px;
 }
+
+.dialog.integrations-dialog.site-setup-dialog {
+  grid-template-rows: none;
+  width: min(760px, calc(100vw - 32px));
+  height: auto;
+  overflow: auto;
+}
+
+.site-setup-dialog .modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.site-setup-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-setup-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--hvy-border);
+  border-radius: 10px;
+}
+
+.site-setup-step.is-done {
+  background: var(--hvy-surface-alt);
+}
+
+.site-setup-step-marker {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--hvy-border);
+  font-weight: 700;
+}
+
+.site-setup-step.is-done .site-setup-step-marker {
+  border-color: var(--hvy-success);
+  background: var(--hvy-success);
+  color: #fff;
+}
+
+.site-setup-step-body {
+  display: grid;
+  gap: 6px;
+}
+
+.site-setup-step-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.site-setup-step-optional {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.site-setup-step-text,
+.site-setup-step-status {
+  margin: 0;
+}
+
+.site-setup-step-status {
+  font-weight: 600;
+}
+
+.site-setup-test-results {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  font-weight: 400;
+}
+
+.site-setup-test-result {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+}
+
+.site-setup-test-title {
+  overflow-wrap: anywhere;
+}
+
+.site-setup-test-problem {
+  color: var(--hvy-danger, #c0392b);
+  font-weight: 600;
+}
+
+.site-setup-test-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 0;
+}
+
+.site-setup-test-label {
+  font-weight: 600;
+}
+
+.site-setup-test-value {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-setup-test-more {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+.site-setup-value-dialog {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.site-setup-value-full {
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--hvy-border, #c5cec8);
+  border-radius: 6px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.site-setup-test-value.site-setup-test-empty {
+  color: var(--hvy-danger, #c0392b);
+  font-style: italic;
+}
+
+.site-setup-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.site-setup-pending {
+  margin: 0 0 8px;
+  font-weight: 600;
+}
+
+.site-setup-address {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.site-setup-footer {
+  align-items: end;
+}
+
+.site-setup-profile {
+  margin-right: auto;
+}
+
+.site-setup-test-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Get to the list: a site setup's steps to its list, and its ready checks (on the shared dialog shell). */
+.site-setup-prepare-dialog {
+  width: min(600px, 100%);
+}
+
+.site-setup-prepare-section {
+  display: grid;
+  gap: 8px;
+}
+
+.site-setup-prepare-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.site-setup-prepare-number {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.site-setup-prepare-title {
+  flex: 1;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.site-setup-prepare-rows {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-setup-prepare-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 10px;
+  border: 1px solid var(--hvy-border, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+}
+
+.site-setup-prepare-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.site-setup-prepare-empty {
+  margin: 0;
+  opacity: 0.75;
+}
+
+.site-setup-prepare-pass {
+  margin: 0;
+  color: var(--hvy-success, #27865f);
+  font-weight: 600;
+}
+
+.site-setup-prepare-status {
+  margin: 0;
+}

@@ -24,6 +24,16 @@ contextBridge.exposeInMainWorld('hvyElectron', {
     ipcRenderer.on('hvy:integration-inspection-result', listener);
     return () => ipcRenderer.removeListener('hvy:integration-inspection-result', listener);
   },
+  onIntegrationBrowserEvent(callback) {
+    const listener = (_event, browserEvent) => callback(browserEvent);
+    ipcRenderer.on('hvy:integration-browser-event', listener);
+    return () => ipcRenderer.removeListener('hvy:integration-browser-event', listener);
+  },
+  onWebAutomationNavigation(callback) {
+    const listener = (_event, navigation) => callback(navigation);
+    ipcRenderer.on('hvy:web-automation-navigation', listener);
+    return () => ipcRenderer.removeListener('hvy:web-automation-navigation', listener);
+  },
   onWebMcpBrokerRequest(callback) {
     const listener = (_event, request) => callback(request);
     ipcRenderer.on('hvy:webmcp-broker-request', listener);

@@ -10,6 +10,8 @@ import type { IntegrationStructuredSource } from './integrationBrowser';
 import type { IntegrationWebMcpToolDescriptor } from './integrationWebMcp';
 import type { RuntimeDocument } from './runtimeDocuments';
 import type { ReviewedDocumentKey } from './documentKeys';
+import type { BackgroundActivity } from './webAutomation/app';
+import type { BackgroundActivityLabel } from './ui/render-background-activity';
 import type { DocumentKeyUsage } from './documentKeyUsage';
 export { filePathBelongsToWorkspace, findFileInWorkspace, findFileInWorkspaces, workspaceFileAccessInWorkspaces, workspacePathForFileInWorkspaces, workspaceRelativeFilePath } from './workspaceFiles';
 
@@ -98,6 +100,7 @@ export interface AppState {
   saveTemplateScope: TemplateScope;
   saveAsDialogOpen: boolean;
   saveAsKind: 'document' | 'template';
+  saveAsSuggestedName: string;
   saveAsScope: 'workspace' | 'anywhere' | 'app';
   exportPdfSavePromptOpen: boolean;
   exportPdfPlaintextConfirmed: boolean;
@@ -123,6 +126,7 @@ export interface AppState {
   documentKeyDeleteId: string | null;
   documentKeyExportSelection: string[];
   documentEncryptionDialogOpen: boolean;
+  pluginApprovalDialogOpen: boolean;
   documentEncryptionAction: 'encrypt' | 'decrypt' | null;
   documentEncryptionKeyId: string | null;
   documentEncryptionKeyLabel: string;
@@ -144,7 +148,7 @@ export interface AppState {
     pageId?: string;
     requestedUrl: string;
     currentUrl: string;
-    navigationKind: 'main-frame' | 'frame-or-main' | 'new-window' | 'address';
+    navigationKind: 'main-frame' | 'new-window' | 'address';
   } | null;
   integrationReadyCheckSelectionPending: boolean;
   integrationReadyCheckValidationPending: boolean;
@@ -170,7 +174,9 @@ export interface AppState {
   integrationActionScope: unknown | null;
   integrationActionAnchors: unknown[];
   integrationActionAnchorRules: InspectionPrivacyRule[][];
-  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope';
+  integrationActionSelectionKind: 'parent' | 'target' | 'example' | 'scope' | 'range';
+  /** While the selection kind is 'range': which boundary of the range field is being picked again. */
+  integrationActionRangeBoundary: 'start' | 'end';
   integrationActionSelectionPending: boolean;
   integrationActionDraftIntegrationId: string | null;
   integrationActionDraftPageId: string | null;
@@ -183,6 +189,8 @@ export interface AppState {
   integrationActionLiveExampleRecords: unknown[];
   integrationActionPreviewDiagnostics: unknown;
   integrationActionPreviewPending: boolean;
+  /** The preview's page stopped scrolling before its end (it kept going): what it found by then is shown. */
+  integrationActionPreviewStoppedEarly: boolean;
   integrationActionEditPageLoading: boolean;
   integrationActionResultOpen: boolean;
   integrationActionResultName: string;
@@ -222,6 +230,67 @@ export interface AppState {
   integrationWebMcpRecordBuilderOpen: boolean;
   integrationWebMcpRecordBuilderPath: string;
   integrationWebMcpConfigureAfterReview: boolean;
+  /** Setting up a site for a document's collection: what the Integrations manager shows while it does. */
+  /** Paths of open documents whose background work waits for the user: their tabs are marked (backgroundActivity.ts). */
+  documentsNeedingYou: string[];
+  /** Background work across open documents, as last read (backgroundActivity.ts): the toolbar indicator and its panel. */
+  backgroundActivity: BackgroundActivity | null;
+  backgroundActivityOpen: boolean;
+  /** What the indicator says; null hides it. */
+  backgroundActivityLabel: BackgroundActivityLabel | null;
+  siteSetup: {
+    collectionName: string;
+    documentName: string;
+    /** What one item is called ("job"). */
+    itemName: string;
+    /** The setup's name: the site's, or the address for a new one. */
+    siteName: string;
+    /** The address it is set up on. */
+    url: string;
+    /** The list page (the address) and, once chosen, one item's own page. */
+    listIntegrationId: string;
+    itemIntegrationId: string | null;
+    fields: Array<{ id: string; label: string }>;
+    /** What the browser says to pick for the record type being built: the box around one item, then its fields. */
+    prompts: { box: string | null; fields: string } | null;
+    /** The next field picking is on an item just opened from the list: its toolbar offers Wrong page, once. */
+    offerWrongPage: boolean;
+    /** Work in progress, such as finding an item on the list. */
+    pending: string | null;
+    error: string | null;
+    /** Why picking an example item didn't open it: said in its step, apart from the setup's own problems (`error`). */
+    itemProblem: string | null;
+    /**
+     * Test: the items found on the list (by title), then what reading their pages gave each, field by field; or why
+     * nothing was found or read. Cleared when the setup changes.
+     */
+    test: {
+      /** Testing now, said in the step. */
+      pending: string | null;
+      /** Each field's value on one line (`value`), and in full as it was read (`full`), for a long one opened whole. */
+      results: Array<{ url: string; title: string; fields: Array<{ label: string; value: string; full: string }>; problem: string | null }> | null;
+      problem: string | null;
+      /** The long value opened in full: its result and field. */
+      opened: { result: number; field: number } | null;
+    } | null;
+    /**
+     * While the list's items open without a link: the fields its rows show (`choices`), and those that tell one row from
+     * another (`chosen`). Null otherwise.
+     */
+    rowKey: { choices: Array<{ id: string; label: string }>; chosen: string[] } | null;
+    /**
+     * Get to the list, its window open (`open`): its steps (the list page's prepare command) and ready checks (the list
+     * page's), and Test: the list loaded fresh, the steps taken, then each check, with what it found.
+     */
+    prepare: {
+      open: boolean;
+      test: {
+        pending: string | null;
+        result: { ready: boolean; message: string; elements: Array<{ id: string; name: string; ready: boolean; reason?: string; value?: string }>; steps?: { status?: string; reason?: string; stepIndex?: number } } | null;
+        problem: string | null;
+      } | null;
+    };
+  } | null;
   integrationCommandBuilderOpen: boolean;
   integrationCommandSelectionPending: boolean;
   integrationCommandDraftIntegrationId: string | null;
@@ -229,6 +298,10 @@ export interface AppState {
   integrationCommandDraftPageId: string | null;
   integrationCommandDraftScope: 'page' | 'record';
   integrationCommandDraftSteps: IntegrationInteractionStepDefinition[];
+  /** A site setup's pagination being recorded: its kind chosen in the browser, then one click pick, saved as picked. */
+  integrationCommandDraftPagination: boolean;
+  /** The command being recorded gets a site setup's list where it is read from (`IntegrationCommandDefinition.prepare`). */
+  integrationCommandDraftPrepare: boolean;
   integrationCommandRunRequest: { integrationId: string; actionId?: string; pageId?: string; commandId: string; recordParent?: string } | null;
   integrationCommandDeleteDialogOpen: boolean;
   integrationCommandDeleteIntegrationId: string | null;
@@ -246,6 +319,14 @@ export interface AppState {
   appSettingsDialogInitialJson: string | null;
   appSettingsDiscardDialogOpen: boolean;
   scriptingReviewDialogOpen: boolean;
+  /** Scheduled jobs (Plugins menu): every scheduled document and its jobs. */
+  scheduledJobsDialogOpen: boolean;
+  /** Scheduled jobs' checkboxes changed and not saved yet: on or off, by `path` NUL `job id`. Applied on Save. */
+  scheduledJobsDraft: Record<string, boolean>;
+  /** Documents a scheduled job is running in, by file reference: its tab is marked busy (or with its problem). */
+  scheduledJobRuns: Record<string, { job: string; problem?: string }>;
+  /** Due scheduled jobs not started yet, and what each waits for ("you to be idle"), by file reference NUL job id. */
+  scheduledJobWaits: Record<string, string>;
   aiSettingsDialogOpen: boolean;
   aiSettingsDraft: AiSettings | null;
   aiSettingsDialogInitialJson: string | null;
@@ -269,13 +350,13 @@ export interface AppState {
   selectedSavedVersionId: string | null;
   closeDocumentDialogOpen: boolean;
   closeDocumentTargetPath: string | null;
-  closeDocumentDraftDialogOpen: boolean;
   saveConflictDialogOpen: boolean;
   saveConflictKind: import('./recoveryDocuments').SaveConflictKind | null;
   saveConflictSavingDocumentId: string | null;
   saveConflictOtherDocumentId: string | null;
   saveConflictContinuation: 'save' | 'saveAndCloseDocument' | 'saveBeforeExportPdf' | 'saveAndCloseApp';
   tabStackOpen: boolean;
+  dismissedRecentTabs: string[];
   tabStackIndex: number;
   appCloseDialogOpen: boolean;
   recoveryBackups: DocumentBackup[];
@@ -292,9 +373,13 @@ export interface AppState {
   };
   renameFilePath: string | null;
   renameFileCurrentName: string | null;
-  renameEncryptedFolderWorkspacePath: string | null;
-  renameEncryptedFolderDirectory: string;
-  renameEncryptedFolderCurrentName: string | null;
+  renameFolderWorkspacePath: string | null;
+  renameFolderDirectory: string;
+  renameFolderCurrentName: string | null;
+  renameFolderEncrypted: boolean;
+  archiveFilePath: string | null;
+  archiveFileName: string | null;
+  archiveFileUnsaved: boolean;
   deleteFilePath: string | null;
   deleteFileName: string | null;
   deleteFolderWorkspacePath: string | null;
@@ -325,6 +410,7 @@ export interface WorkspaceFilterConfig {
   mode: HvyDocumentSearchMode;
   filterMode: SearchFilterMode;
   targetDirectory: string;
+  /** By file reference (runtimeDocuments.ts), so a file renamed or moved keeps its results. */
   snapshots: Record<string, HvySearchSnapshot>;
 }
 
@@ -391,8 +477,8 @@ export interface WorkspaceTransferState {
 
 export interface WorkspaceClipboardState {
   mode: 'copy' | 'cut';
-  path: string;
-  name: string;
+  /** The file's reference, so a rename or move between cut and paste pastes it from where it is now. */
+  file: RuntimeDocument;
 }
 
 export type PendingWorkspaceFileOperation =
@@ -457,6 +543,7 @@ export const state: AppState = {
   saveTemplateScope: 'app',
   saveAsDialogOpen: false,
   saveAsKind: 'document',
+  saveAsSuggestedName: '',
   saveAsScope: 'workspace',
   exportPdfSavePromptOpen: false,
   exportPdfPlaintextConfirmed: false,
@@ -482,6 +569,7 @@ export const state: AppState = {
   documentKeyDeleteId: null,
   documentKeyExportSelection: [],
   documentEncryptionDialogOpen: false,
+  pluginApprovalDialogOpen: false,
   documentEncryptionAction: null,
   documentEncryptionKeyId: null,
   documentEncryptionKeyLabel: '',
@@ -523,6 +611,7 @@ export const state: AppState = {
   integrationActionAnchors: [],
   integrationActionAnchorRules: [],
   integrationActionSelectionKind: 'parent',
+  integrationActionRangeBoundary: 'start',
   integrationActionSelectionPending: false,
   integrationActionDraftIntegrationId: null,
   integrationActionDraftPageId: null,
@@ -535,6 +624,7 @@ export const state: AppState = {
   integrationActionLiveExampleRecords: [],
   integrationActionPreviewDiagnostics: null,
   integrationActionPreviewPending: false,
+  integrationActionPreviewStoppedEarly: false,
   integrationActionEditPageLoading: false,
   integrationActionResultOpen: false,
   integrationActionResultName: '',
@@ -576,11 +666,18 @@ export const state: AppState = {
   integrationWebMcpConfigureAfterReview: false,
   integrationCommandBuilderOpen: false,
   integrationCommandSelectionPending: false,
+  documentsNeedingYou: [],
+  backgroundActivity: null,
+  backgroundActivityOpen: false,
+  backgroundActivityLabel: null,
+  siteSetup: null,
   integrationCommandDraftIntegrationId: null,
   integrationCommandDraftActionId: null,
   integrationCommandDraftPageId: null,
   integrationCommandDraftScope: 'record',
   integrationCommandDraftSteps: [],
+  integrationCommandDraftPagination: false,
+  integrationCommandDraftPrepare: false,
   integrationCommandRunRequest: null,
   integrationCommandDeleteDialogOpen: false,
   integrationCommandDeleteIntegrationId: null,
@@ -598,6 +695,10 @@ export const state: AppState = {
   appSettingsDialogInitialJson: null,
   appSettingsDiscardDialogOpen: false,
   scriptingReviewDialogOpen: false,
+  scheduledJobsDialogOpen: false,
+  scheduledJobsDraft: {},
+  scheduledJobRuns: {},
+  scheduledJobWaits: {},
   aiSettingsDialogOpen: false,
   aiSettingsDraft: null,
   aiSettingsDialogInitialJson: null,
@@ -621,13 +722,13 @@ export const state: AppState = {
   selectedSavedVersionId: null,
   closeDocumentDialogOpen: false,
   closeDocumentTargetPath: null,
-  closeDocumentDraftDialogOpen: false,
   saveConflictDialogOpen: false,
   saveConflictKind: null,
   saveConflictSavingDocumentId: null,
   saveConflictOtherDocumentId: null,
   saveConflictContinuation: 'save',
   tabStackOpen: false,
+  dismissedRecentTabs: [],
   tabStackIndex: 0,
   appCloseDialogOpen: false,
   recoveryBackups: [],
@@ -637,9 +738,13 @@ export const state: AppState = {
   encryptedAIAccessPrompt: null,
   renameFilePath: null,
   renameFileCurrentName: null,
-  renameEncryptedFolderWorkspacePath: null,
-  renameEncryptedFolderDirectory: '',
-  renameEncryptedFolderCurrentName: null,
+  renameFolderWorkspacePath: null,
+  renameFolderDirectory: '',
+  renameFolderCurrentName: null,
+  renameFolderEncrypted: false,
+  archiveFilePath: null,
+  archiveFileName: null,
+  archiveFileUnsaved: false,
   deleteFilePath: null,
   deleteFileName: null,
   deleteFolderWorkspacePath: null,
@@ -679,3 +784,13 @@ export const state: AppState = {
   appZoom: 1,
   documentZoom: 1,
 };
+
+/**
+ * The fields of the collection a site setup is for, while the record type being built is one of its pages: each
+ * column is assigned one of them. Null for any other record type.
+ */
+export function siteSetupFields(app: AppState = state): NonNullable<AppState['siteSetup']>['fields'] | null {
+  return app.siteSetup && app.integrationRegistry.integrations.some((integration) => integration.id === app.integrationActionDraftIntegrationId && integration.siteSetup)
+    ? app.siteSetup.fields
+    : null;
+}

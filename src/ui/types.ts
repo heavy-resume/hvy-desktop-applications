@@ -51,9 +51,9 @@ export interface UiHandlers {
   addFilesToWorkspace(workspacePath: string, targetDirectory?: string): void;
   addDroppedFilesToWorkspace(workspacePath: string, files: File[], targetDirectory?: string): void;
   deleteWorkspaceFolder(workspacePath: string, targetDirectory: string): void;
-  renameEncryptedFolder(workspacePath: string, targetDirectory: string, currentName: string): void;
-  submitRenameEncryptedFolder(name: string): void;
-  cancelRenameEncryptedFolder(): void;
+  renameFolder(workspacePath: string, targetDirectory: string, currentName: string, encrypted: boolean): void;
+  submitRenameFolder(name: string): void;
+  cancelRenameFolder(): void;
   confirmDeleteWorkspaceFolder(workspacePath: string, targetDirectory: string, folderName: string, archivedFiles: string[]): void;
   cancelDeleteWorkspaceFolder(): void;
   openWorkspaceFilter(workspacePath: string, targetDirectory?: string): void;
@@ -79,8 +79,21 @@ export interface UiHandlers {
   openAbout(): void;
   openIntegrations(): void;
   closeIntegrations(): void;
+  /** A step of setting up a site for a document's collection, or Done (see siteSetupSession.ts). */
+  siteSetupStep(step: string): void;
+  /** Site setup, Get to the list: its window opened or closed. */
+  openSiteSetupPrepare(open: boolean): void;
+  /** Get to the list window: Record steps, Add ready check, or Test. */
+  siteSetupPrepareStep(step: 'record' | 'add-check' | 'test'): void;
+  removeSiteSetupPrepareStep(index: number): void;
+  removeSiteSetupReadyCheck(checkId: string): void;
+  /** Site setup, Tell items apart by: a field ticked or unticked. */
+  siteSetupRowKey(fieldId: string): void;
+  stopIntegrationActionPreview(): void;
+  openSiteSetupTestValue(opened: { result: number; field: number } | null): void;
+  showSiteSetupTestMatching(result: number): void;
   openIntegration(destination: 'msn' | 'gmail' | 'calendar'): void;
-  openIntegrationPage(integrationId: string, pageId: string, profileId?: string): void;
+  openIntegrationPage(integrationId: string, pageId: string, profileId?: string): Promise<void>;
   openIntegrationReadyChecks(integrationId: string, pageId: string): void;
   cancelIntegrationReadyChecks(): void;
   cancelIntegrationReadyCheckSelection(): void;
@@ -101,13 +114,17 @@ export interface UiHandlers {
   chooseIntegrationWebMcpRecordType(): void;
   backIntegrationRecordTypeSource(): void;
   selectIntegrationWebMcpRecordTool(toolIndex: number): void;
-  editIntegrationAction(integrationId: string, actionId: string): void;
+  /** With `example`, on that page, going on to pick a new example's fields there. */
+  editIntegrationAction(integrationId: string, actionId: string, example?: { pageId: string }): void;
   closeIntegrationActionBuilder(): void;
   cancelDiscardIntegrationAction(): void;
   confirmDiscardIntegrationAction(): void;
   cancelIntegrationActionSelection(): void;
   addAnotherIntegrationActionExample(parentIndex?: number, fieldIndex?: number | null): void;
-  addIntegrationActionAnchor(): void;
+  changeIntegrationActionRange(parentIndex: number, fieldIndex: number, boundary: 'start' | 'end'): void;
+  /** With `openPage`, opening the record type's page first, and picking once it has loaded. */
+  addIntegrationActionAnchor(open?: { openPage?: boolean }): void;
+  addIntegrationActionExample(): void;
   limitIntegrationActionToSection(): void;
   removeIntegrationActionScope(): void;
   testIntegrationActionPattern(): void;
@@ -128,9 +145,10 @@ export interface UiHandlers {
   runIntegrationAction(integrationId: string, actionId: string): void;
   closeIntegrationActionResult(): void;
   addCommandForIntegrationAction(integrationId: string, actionId: string): void;
-  addCommandForIntegrationPage(integrationId: string, pageId: string): void;
+  /** A page command, recorded: a site setup's list's way to its next page (`pagination`) or to where it is read (`prepare`). */
+  addCommandForIntegrationPage(integrationId: string, pageId: string, purpose?: 'pagination' | 'prepare'): void;
   cancelIntegrationCommandBuilder(): void;
-  saveIntegrationCommand(name: string, inputNames: Record<string, string>): void;
+  saveIntegrationCommand(name: string, inputNames: Record<string, string>, kind?: { pagination?: 'next' | 'page-number' }): void;
   requestDeleteIntegrationCommand(integrationId: string, actionId: string, commandId: string): void;
   requestDeleteIntegrationPageCommand(integrationId: string, pageId: string, commandId: string): void;
   cancelDeleteIntegrationCommand(): void;
@@ -144,6 +162,9 @@ export interface UiHandlers {
   confirmDeleteIntegrationAction(): void;
   reviewIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
   removeIntegrationActionSelection(kind: 'target' | 'example', index: number): void;
+  pickIntegrationRecordFields(open?: { openPage?: boolean }): void;
+  /** Opens an integration page to pick on it: the picking starts once it has loaded, or at once when it is showing. */
+  inspectIntegrationPage(integrationId: string, pageId: string, inspectionKind: 'parent' | 'target', options: Record<string, unknown>): Promise<void>;
   selectIntegration(integrationId: string): void;
   selectIntegrationProfile(profileId: string): void;
   requestAddIntegrationProfile(): void;
@@ -199,6 +220,17 @@ export interface UiHandlers {
   selectDocumentEncryptionKey(keyId: string): void;
   setDocumentEncryptionKeyLabel(label: string): void;
   confirmDocumentEncryption(): void;
+  openPluginApprovals(): void;
+  cancelPluginApprovals(): void;
+  allowPlugins(acceptanceKeys: string[]): void;
+  openBackgroundActivity(): void;
+  closeBackgroundActivity(): void;
+  stopBackgroundRun(path: string, runId: string): void;
+  pauseBackgroundQueue(path: string, queueId: string): void;
+  resumeBackgroundQueue(path: string, queueId: string): void;
+  pauseAllBackgroundQueues(): void;
+  stopBackgroundQueue(path: string, queueId: string): void;
+  stopAllBackgroundWork(): void;
   cancelDocumentEncryption(): void;
   closeAbout(): void;
   openDebugLog(): void;
@@ -222,6 +254,11 @@ export interface UiHandlers {
   keepEditingAppSettings(): void;
   openScriptingReview(): void;
   closeScriptingReview(): void;
+  openScheduledJobs(): void;
+  closeScheduledJobs(): void;
+  setScheduledJobOn(path: string, jobId: string, on: boolean): void;
+  saveScheduledJobs(): void;
+  openScheduledDocument(path: string): void;
   setWholeFilePowerScriptingAllowed(path: string, allowed: boolean): void;
   revokePowerScriptAcceptance(path: string, fingerprint: string): void;
   openAiSettings(): void;
@@ -268,19 +305,19 @@ export interface UiHandlers {
   cancelCloseDocument(): void;
   reloadExternalFileChange(): void;
   dismissExternalFileChange(): void;
+  dismissError(): void;
   confirmSaveConflict(): void;
   cancelSaveConflict(): void;
   saveBeforeWorkspaceFileOperation(): void;
   discardBeforeWorkspaceFileOperation(): void;
   cancelWorkspaceFileOperation(): void;
   closeDocumentWithoutSaving(): void;
-  discardCloseDocumentDraft(): void;
-  reviewCloseDocumentLater(): void;
   saveAndCloseApp(): void;
   closeAppWithoutSaving(): void;
   cancelAppClose(): void;
   selectDocumentTab(path: string): void;
   closeDocumentTab(path: string): void;
+  dismissRecentTab(path: string): void;
   cycleTabStack(direction: 1 | -1): void;
   commitTabStack(): void;
   cancelTabStack(): void;
@@ -294,7 +331,9 @@ export interface UiHandlers {
   retryWorkspace(path: string): void;
   showFileInFolder(path: string): void;
   renameFile(path: string, currentName: string): void;
-  archiveFile(path: string, currentName: string): void;
+  confirmArchiveFile(path: string, currentName: string): void;
+  archiveFile(): void;
+  cancelArchiveFile(): void;
   restoreFile(path: string, currentName: string): void;
   setFileLocked(path: string, currentName: string, locked: boolean): void;
   setFileHiddenFromAI(path: string, currentName: string, hiddenFromAI: boolean): void;

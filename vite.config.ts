@@ -99,6 +99,55 @@ const builtInDefinitions = [
     modulePath: 'src/plugins/webMcpTool.ts',
     root: 'app',
   },
+  {
+    id: 'galaxy.web-api',
+    key: 'galaxyWebApi',
+    exportName: 'webApiPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.web-collection',
+    key: 'galaxyWebCollection',
+    exportName: 'webCollectionPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.queue',
+    key: 'galaxyQueue',
+    exportName: 'queuePlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.web-profile-context',
+    key: 'galaxyWebProfileContext',
+    exportName: 'profileContextPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.similarity',
+    key: 'galaxySimilarity',
+    exportName: 'similarityPlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.schedule',
+    key: 'galaxySchedule',
+    exportName: 'schedulePlugin',
+    modulePath: 'src/plugins/webAutomation.ts',
+    root: 'app',
+  },
+  {
+    id: 'galaxy.file-picker',
+    key: 'galaxyFilePicker',
+    exportName: 'filePickerPlugin',
+    modulePath: 'src/plugins/filePicker.ts',
+    root: 'app',
+  },
 ] as const;
 
 function createHvyBuiltInPluginsPlugin(): Plugin {
@@ -138,7 +187,7 @@ export default defineConfig({
   },
   plugins: [createBrythonMinimalVfsPlugin(), createHvyBuiltInPluginsPlugin()],
   optimizeDeps: {
-    entries: ['index.html', 'plugin-builder.html'],
+    entries: ['index.html', 'pages/plugin-builder.html', 'pages/integration-toolbar.html'],
   },
   test: {
     setupFiles: ['./src/test/vitest.setup.ts'],
@@ -163,7 +212,8 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve('index.html'),
-        pluginBuilder: resolve('plugin-builder.html'),
+        pluginBuilder: resolve('pages/plugin-builder.html'),
+        integrationToolbar: resolve('pages/integration-toolbar.html'),
       },
     },
   },

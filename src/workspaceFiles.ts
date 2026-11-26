@@ -80,3 +80,7 @@ export function workspaceFileAccessInWorkspaces(
   }
   return { archived: false, locked: false, hiddenFromAI: false, encryptedAIAllowed: false, readOnly: false };
 }
+
+export function flattenWorkspaceFiles(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
+  return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFiles(node.children));
+}

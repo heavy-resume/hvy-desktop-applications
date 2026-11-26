@@ -171,6 +171,21 @@ struct DeleteEncryptedFolderChildRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+struct RenameWorkspaceFolderRequest {
+    workspace_path: String,
+    target_directory: String,
+    name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenamedWorkspaceFolder {
+    workspace: Workspace,
+    relocated_files: Vec<WorkspaceFileRelocation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct DeleteWorkspaceFolderRequest {
     workspace_path: String,
     target_directory: String,
@@ -285,6 +300,8 @@ struct DocumentFileMetadata {
     hidden_from_ai: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     recovery_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relocated_archived_files: Vec<WorkspaceFileRelocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -608,6 +625,17 @@ struct AppSettings {
     web_capability_authorizations: std::collections::BTreeMap<String, std::collections::BTreeMap<String, WebCapabilityAuthorizationRecord>>,
     #[serde(default)]
     integration_web_mcp_approvals: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    web_service_approvals: std::collections::BTreeMap<String, serde_json::Value>,
+    // How many pages web collection reads at once; validated by the renderer's normalizeCollectionWorkerLimits.
+    #[serde(default)]
+    web_collection_limits: serde_json::Value,
+    // Documents with scheduled jobs, by path; validated by the renderer's normalizeScheduledDocuments.
+    #[serde(default)]
+    scheduled_documents: serde_json::Value,
+    // How many scheduled jobs' work may go on at once; validated by the renderer's normalizeScheduledJobsAtOnce.
+    #[serde(default)]
+    scheduled_jobs_at_once: serde_json::Value,
 }
 
 impl Default for AppSettings {
@@ -625,6 +653,10 @@ impl Default for AppSettings {
             web_capability_profile_bindings: std::collections::BTreeMap::new(),
             web_capability_authorizations: std::collections::BTreeMap::new(),
             integration_web_mcp_approvals: std::collections::BTreeMap::new(),
+            web_service_approvals: std::collections::BTreeMap::new(),
+            web_collection_limits: serde_json::Value::Null,
+            scheduled_documents: serde_json::Value::Null,
+            scheduled_jobs_at_once: serde_json::Value::Null,
         }
     }
 }

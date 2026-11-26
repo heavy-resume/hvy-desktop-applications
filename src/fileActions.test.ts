@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import type { AppState } from './state';
 import { currentDocumentWorkspacePath, getFileActionAvailability, isHomepageOpen } from './fileActions';
 
@@ -65,7 +66,7 @@ describe('homepage file action', () => {
 
   it('is available when a homepage is configured', () => {
     const state = encryptedDocumentState(false);
-    state.appSettings = { homepage: { kind: 'file', path: '/workspace/Home.hvy' } } as AppState['appSettings'];
+    state.appSettings = { homepage: { kind: 'file', file: 'home' as FileKey } } as AppState['appSettings'];
 
     expect(getFileActionAvailability(state).openHomepage).toBe(true);
   });
@@ -81,7 +82,7 @@ describe('homepage file action', () => {
 describe('open homepage identity', () => {
   it('recognizes the active configured file', () => {
     const state = encryptedDocumentState(false);
-    state.appSettings = { homepage: { kind: 'file', path: state.document!.source.path } } as AppState['appSettings'];
+    state.appSettings = { homepage: { kind: 'file', file: state.document!.source.documentId } } as AppState['appSettings'];
 
     expect(isHomepageOpen(state)).toBe(true);
   });
@@ -95,7 +96,7 @@ describe('open homepage identity', () => {
 
   it('does not treat a virtual view of the configured file as the homepage', () => {
     const state = encryptedDocumentState(false);
-    state.appSettings = { homepage: { kind: 'file', path: state.document!.source.path } } as AppState['appSettings'];
+    state.appSettings = { homepage: { kind: 'file', file: state.document!.source.documentId } } as AppState['appSettings'];
     state.document!.virtual = 'versionHistory';
 
     expect(isHomepageOpen(state)).toBe(false);

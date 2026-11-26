@@ -1,0 +1,444 @@
+import { stableJson } from '../../webCapabilities';
+import type {
+  BrowserHost,
+  CommandRequest,
+  CommandResult,
+  HostRequest,
+  HostResponse,
+  InspectionRequest,
+  NavigationEvent,
+  PageInspection,
+  PageLocation,
+  PatternMatch,
+} from '../../webAutomation/host';
+import { globMatches, type PlatformSignal } from '../../webAutomation/sitePatterns';
+import { WebAutomationError } from '../../webAutomation/errors';
+
+export interface MockPage {
+  /** Pattern ID → what that pattern extracts here. Stands in for structural matching. */
+  matches?: Record<string, PatternMatch>;
+  signals?: PlatformSignal[];
+  /** Where the pagination command leads, as a path or URL. */
+  nextPage?: string;
+  /** False for single-page-app listings that do not restore after back navigation. */
+  restoresOnBack?: boolean;
+  /** Blocks the page until the profile holds the site's clearance cookie. */
+  challenge?: boolean;
+  /**
+   * A sign-in screen or human check shown as an ordinary page, as a real browser host sees one: the page is ready and
+   * matches nothing, until the profile holds the site's clearance cookie.
+   */
+  wall?: boolean;
+  frames?: Array<{ src: string }>;
+  /** Side-pane boards: record ref → what the pane shows after the item command. */
+  panes?: Record<string, Pick<MockPage, 'matches'>>;
+  /** Side-pane boards: the record ref whose pane shows before any is clicked. */
+  shownPane?: string;
+  /** Lists whose items a click opens (what opens them has no link): record ref → where clicking in it goes. */
+  opens?: Record<string, string>;
+  /** Its `opens` open in a new tab (`window.open`), leaving this page as it is. */
+  opensInNewTab?: boolean;
+  /**
+   * A list shown only once it is searched for (`prepare`, its command): what the command types (`value`, as recorded).
+   * Until then it matches no list. A list's anchors (`{ name, expectedValue }`) hold when what was typed is
+   * their value. Opening the page again, or going Back to it, forgets it, unless the site `remembers` it.
+   */
+  prepare?: { commandId: string; value: string; remembers?: boolean };
+}
+
+export interface MockRouteRequest {
+  method: string;
+  path: string;
+  params: Record<string, string>;
+  /** The URL's query, by name ("?range=5d" → { range: '5d' }). Routes match the path alone. */
+  query: Record<string, string>;
+  headers: Record<string, string>;
+  body: unknown;
+  cookies: Record<string, string>;
+  clearCookie(name: string): void;
+}
+
+export type MockRoute = (request: MockRouteRequest) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>;
+
+export interface MockSite {
+  origin: string;
+  /** Keyed by path, optionally with query: "/acme/jobs?page=2". */
+  pages: Record<string, MockPage>;
+  /** Keyed by "METHOD /path/{param}". */
+  api?: Record<string, MockRoute>;
+  login?: { loginPath: string; completePath: string; cookie: { name: string; value: string } };
+  /** Files served to read (for example, a storage bucket), keyed by path; the query (a signature) is ignored. */
+  files?: Record<string, { bytes(): Uint8Array | Promise<Uint8Array>; redirectTo?: string }>;
+}
+
+const CLEARANCE_COOKIE = 'mock_clearance';
+
+interface MockWorker {
+  profileId: string;
+  history: string[];
+  index: number;
+  restored: boolean;
+  visible: boolean;
+  pane: string | null;
+  /** What each page with a `prepare` has had typed into it, by address. */
+  typed: Map<string, string>;
+  /** What its page asked to open in a new tab since its last command. */
+  opened: string[];
+}
+
+export class MockHost implements BrowserHost {
+  private heldRequests: Array<{ path: string; released: Promise<void> }> = [];
+  private heldNavigations: Array<{ path: string; reached: () => void; released: Promise<void> }> = [];
+  /** Paths whose pages fail to load, with what the host says (`failNavigation`). */
+  private failingNavigations: Array<{ path: string; message: string }> = [];
+  private readonly sites = new Map<string, MockSite>();
+  private readonly jars = new Map<string, Map<string, Record<string, string>>>();
+  private readonly workers = new Map<string, MockWorker>();
+  private readonly userWindows = new Map<string, { url: string; visible: boolean }>();
+  private readonly listeners = new Set<(event: NavigationEvent) => void>();
+  private nextWorker = 1;
+  log: (message: string) => void = () => undefined;
+
+  constructor(sites: MockSite[]) {
+    for (const site of sites) this.sites.set(site.origin, site);
+  }
+
+  // ── BrowserHost ──────────────────────────────────────────────
+
+  async createWorker(profileId: string): Promise<string> {
+    const workerId = `w${this.nextWorker++}`;
+    this.workers.set(workerId, { profileId, history: [], index: -1, restored: true, visible: false, pane: null, typed: new Map(), opened: [] });
+    return workerId;
+  }
+
+  async closeWorker(workerId: string): Promise<void> {
+    this.workers.delete(workerId);
+  }
+
+  async showWorker(workerId: string): Promise<void> {
+    this.worker(workerId).visible = true;
+    this.log(`${workerId} shown to the user`);
+  }
+
+  async hideWorker(workerId: string): Promise<void> {
+    this.worker(workerId).visible = false;
+  }
+
+  async navigate(workerId: string, url: string): Promise<PageLocation> {
+    const worker = this.worker(workerId);
+    const href = new URL(url).href;
+    const held = this.heldNavigations.find((hold) => new URL(href).pathname.startsWith(hold.path));
+    if (held) {
+      held.reached();
+      await held.released;
+    }
+    const failing = this.failingNavigations.find((fail) => new URL(href).pathname.startsWith(fail.path));
+    if (failing) {
+      this.log(`${workerId} ✗ ${this.short(href)}: ${failing.message}`);
+      throw new Error(failing.message);
+    }
+    worker.history = [...worker.history.slice(0, worker.index + 1), href];
+    worker.index = worker.history.length - 1;
+    worker.restored = true;
+    worker.pane = null;
+    if (!this.page(href)?.prepare?.remembers) worker.typed.delete(href);
+    this.log(`${workerId} → ${this.short(href)}`);
+    this.notify({ profileId: worker.profileId, window: 'worker', workerId, url: href });
+    return { url: href };
+  }
+
+  async back(workerId: string): Promise<PageLocation> {
+    const worker = this.worker(workerId);
+    if (worker.index <= 0) throw new Error(`${workerId} has no page to go back to.`);
+    worker.index -= 1;
+    worker.pane = null;
+    const href = worker.history[worker.index];
+    worker.restored = this.page(href)?.restoresOnBack !== false;
+    // Back loads a searched list again: what was typed is gone, as when opened again.
+    if (!this.page(href)?.prepare?.remembers) worker.typed.delete(href);
+    this.log(`${workerId} ← back to ${this.short(href)}${worker.restored ? '' : ' (not restored)'}`);
+    return { url: href };
+  }
+
+  async takeOpenedWindow(workerId: string): Promise<{ workerId: string; url: string } | null> {
+    const worker = this.worker(workerId);
+    const url = worker.opened.pop();
+    worker.opened = [];
+    if (!url) return null;
+    const opened = await this.createWorker(worker.profileId);
+    this.log(`${workerId} opened ${this.short(url)} in ${opened}`);
+    return { workerId: opened, url: (await this.navigate(opened, url)).url };
+  }
+
+  async inspect(workerId: string, request: InspectionRequest): Promise<PageInspection> {
+    const worker = this.worker(workerId);
+    const url = worker.history[worker.index];
+    const page = this.page(url);
+    if (page?.challenge && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
+      return { url, ready: false, attention: 'challenge', matches: {}, fingerprintMatches: {}, frames: [] };
+    }
+    if (page?.wall && !this.cookies(worker.profileId, new URL(url).origin)[CLEARANCE_COOKIE]) {
+      return { url, ready: true, matches: {}, fingerprintMatches: {}, frames: [] };
+    }
+    const paneRef = worker.pane ?? page?.shownPane;
+    const pane = paneRef ? page?.panes?.[paneRef] : undefined;
+    // A list shown only once searched for shows nothing before.
+    const typed = worker.typed.get(url);
+    const visible = page?.prepare && typed === undefined ? {} : { ...(page?.matches ?? {}), ...(pane?.matches ?? {}) };
+    const matches = worker.restored
+      ? Object.fromEntries(Object.entries(visible).filter(([patternId]) => request.patterns.some((pattern) => pattern.id === patternId)))
+      : {};
+    // A list read only as far as its limit, as the inspector stops scrolling there.
+    if (request.listingLimit) {
+      for (const pattern of request.patterns) {
+        const match = matches[pattern.id];
+        if (pattern.role === 'listing' && match && match.records.length > request.listingLimit) {
+          matches[pattern.id] = { ...match, records: match.records.slice(0, request.listingLimit) };
+          this.log(`${workerId} read the first ${request.listingLimit} rows of ${this.short(url)}`);
+        }
+      }
+    }
+    const fingerprintMatches = Object.fromEntries(Object.entries(request.fingerprints).flatMap(([patternId, signals]) => (
+      signals.length && signals.every((signal) => this.signalPresent(url, page, signal)) ? [[patternId, signals.length]] : []
+    )));
+    // A list's anchors hold when what was typed is their value; said as the page's inspector says a ready check failed.
+    const anchors = request.anchorsOf?.anchors as Array<{ name: string; expectedValue: string }> | undefined;
+    const failing = anchors?.find((anchor) => typed !== anchor.expectedValue);
+    const anchorProblem = !failing ? null : typed === undefined ? `The page is missing the ready check: ${failing.name}.` : `The ready check value changed: ${failing.name}.`;
+    return {
+      url,
+      ready: true,
+      matches: structuredClone(matches),
+      fingerprintMatches,
+      frames: structuredClone(page?.frames ?? []),
+      ...(anchors?.length ? { anchors: { ready: !failing, problem: anchorProblem } } : {}),
+    };
+  }
+
+  async runCommand(workerId: string, request: CommandRequest): Promise<CommandResult> {
+    const worker = this.worker(workerId);
+    const url = worker.history[worker.index];
+    worker.opened = [];
+    if (request.recordRef) {
+      const opens = this.page(url)?.opens?.[request.recordRef];
+      if (opens) {
+        this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);
+        if (this.page(url)?.opensInNewTab) worker.opened.push(new URL(opens, url).href);
+        else await this.navigate(workerId, new URL(opens, url).href);
+        return { status: 'executed' };
+      }
+      if (!this.page(url)?.panes?.[request.recordRef]) return { status: 'no_match' };
+      worker.pane = request.recordRef;
+      this.log(`${workerId} click ${request.commandId} on ${request.recordRef}`);
+      return { status: 'executed' };
+    }
+    const prepare = this.page(url)?.prepare;
+    if (prepare && request.commandId === prepare.commandId) {
+      worker.typed.set(url, prepare.value);
+      this.log(`${workerId} ${request.commandId}: typed “${prepare.value}”`);
+      return { status: 'executed' };
+    }
+    const next = this.page(url)?.nextPage;
+    if (!next) return { status: 'no_match' };
+    this.log(`${workerId} click ${request.commandId}${request.pageNumber ? ` for page ${request.pageNumber}` : ''}`);
+    await this.navigate(workerId, new URL(next, url).href);
+    return { status: 'executed' };
+  }
+
+  async request(workerId: string, request: HostRequest): Promise<HostResponse> {
+    const worker = this.worker(workerId);
+    const current = worker.history[worker.index];
+    const target = new URL(request.url);
+    if (!current || new URL(current).origin !== target.origin) {
+      throw new Error(`Cross-origin request from ${current ?? 'a blank page'} to ${target.origin}.`);
+    }
+    const held = this.heldRequests.find((hold) => target.pathname.startsWith(hold.path));
+    if (held) await held.released;
+    const site = this.sites.get(target.origin);
+    const route = this.findRoute(site, request.method, target.pathname);
+    const jar = this.cookies(worker.profileId, target.origin);
+    if (!route) return { status: 404, contentType: 'application/json', body: { error: 'Not found' } };
+    const response = await route.handler({
+      method: request.method,
+      path: target.pathname,
+      params: route.params,
+      query: Object.fromEntries(target.searchParams),
+      headers: request.headers,
+      body: request.body ? JSON.parse(request.body) : null,
+      cookies: { ...jar },
+      clearCookie: (name) => {
+        delete jar[name];
+      },
+    });
+    return { status: response.status, contentType: 'application/json', body: structuredClone(response.body) };
+  }
+
+  async openUserWindow(profileId: string, url: string): Promise<void> {
+    this.userWindows.set(profileId, { url, visible: true });
+    this.log(`user window (${profileId}) → ${this.short(url)}`);
+    this.notify({ profileId, window: 'user', url });
+  }
+
+  async hideUserWindow(profileId: string): Promise<void> {
+    const window = this.userWindows.get(profileId);
+    if (window) window.visible = false;
+    this.log(`user window (${profileId}) hidden`);
+  }
+
+  onNavigation(listener: (event: NavigationEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  // ── Simulated user actions ───────────────────────────────────
+
+  /** The user finishes the site's own login form in the user window, optionally as a different account. */
+  completeLogin(profileId: string, origin: string, cookieValue?: string): void {
+    const site = this.sites.get(origin);
+    if (!site?.login) throw new Error(`${origin} has no mock login.`);
+    this.cookies(profileId, origin)[site.login.cookie.name] = cookieValue ?? site.login.cookie.value;
+    const url = new URL(site.login.completePath, origin).href;
+    this.userWindows.set(profileId, { url, visible: true });
+    this.log(`user window (${profileId}) → ${this.short(url)}`);
+    this.notify({ profileId, window: 'user', url });
+  }
+
+  async fetchFile(url: string, options: { maxBytes: number }): Promise<Uint8Array> {
+    const target = new URL(url);
+    const file = this.sites.get(target.origin)?.files?.[target.pathname];
+    this.log(`fetch file ${this.short(url)} (no credentials)`);
+    if (!file) throw new WebAutomationError('http_error', `${target.origin}${target.pathname} returned 404.`, 404);
+    if (file.redirectTo) throw new WebAutomationError('http_error', `${target.origin}${target.pathname} redirected; redirects are not followed.`, 302);
+    const bytes = await file.bytes();
+    if (bytes.byteLength > options.maxBytes) throw new WebAutomationError('invalid_request', `The file is larger than ${options.maxBytes} bytes.`);
+    return new Uint8Array(bytes);
+  }
+
+  /** Page loads of paths under `path` fail, as the host says (Tauri's "The page did not finish loading."). */
+  failNavigation(path: string, message: string): void {
+    this.failingNavigations.push({ path, message });
+  }
+
+  /** Holds page loads of paths under `path` until released, like a page that takes long to load: `reached` says one started. */
+  holdNavigation(path: string): { reached: Promise<void>; release: () => void } {
+    let reached = () => undefined as void;
+    let release = () => undefined as void;
+    const hold = {
+      path,
+      reached: () => reached(),
+      released: new Promise<void>((resolve) => { release = resolve; }),
+    };
+    const started = new Promise<void>((resolve) => { reached = resolve; });
+    this.heldNavigations.push(hold);
+    return {
+      reached: started,
+      release: () => {
+        this.heldNavigations = this.heldNavigations.filter((candidate) => candidate !== hold);
+        release();
+      },
+    };
+  }
+
+  /** Holds requests to paths under `path` until released, like a slow network: the call stays in flight. */
+  holdRequests(path: string): () => void {
+    let release = () => undefined as void;
+    const hold = { path, released: new Promise<void>((resolve) => { release = resolve; }) };
+    this.heldRequests.push(hold);
+    this.log(`requests to ${path} held`);
+    return () => {
+      this.heldRequests = this.heldRequests.filter((candidate) => candidate !== hold);
+      this.log(`requests to ${path} released`);
+      release();
+    };
+  }
+
+  /** The user solves a bot challenge; the clearance is shared by the profile's webviews. */
+  /** A person gets a worker's page where its list is read from by hand (Show, while the run waits for them). */
+  typeOnPage(workerId: string, value: string): void {
+    const worker = this.worker(workerId);
+    worker.typed.set(worker.history[worker.index], value);
+    this.log(`${workerId} typed “${value}” by hand`);
+  }
+
+  solveChallenge(profileId: string, origin: string): void {
+    this.cookies(profileId, origin)[CLEARANCE_COOKIE] = 'ok';
+    this.log(`challenge solved for ${new URL(origin).host} (${profileId})`);
+  }
+
+  /** The site's session expires or is revoked elsewhere. */
+  expireSession(profileId: string, origin: string): void {
+    const site = this.sites.get(origin);
+    if (site?.login) delete this.cookies(profileId, origin)[site.login.cookie.name];
+    this.log(`session expired for ${new URL(origin).host} (${profileId})`);
+  }
+
+  isUserWindowVisible(profileId: string): boolean {
+    return this.userWindows.get(profileId)?.visible ?? false;
+  }
+
+  isWorkerVisible(workerId: string): boolean {
+    return this.workers.get(workerId)?.visible ?? false;
+  }
+
+  workerIds(): string[] {
+    return [...this.workers.keys()];
+  }
+
+  // ── Internals ────────────────────────────────────────────────
+
+  private worker(workerId: string): MockWorker {
+    const worker = this.workers.get(workerId);
+    if (!worker) throw new Error(`Unknown worker ${workerId}.`);
+    return worker;
+  }
+
+  private page(url: string | undefined): MockPage | undefined {
+    if (!url) return undefined;
+    const parsed = new URL(url);
+    const site = this.sites.get(parsed.origin);
+    return site?.pages[`${parsed.pathname}${parsed.search}`] ?? site?.pages[parsed.pathname];
+  }
+
+  private cookies(profileId: string, origin: string): Record<string, string> {
+    let jar = this.jars.get(profileId);
+    if (!jar) {
+      jar = new Map();
+      this.jars.set(profileId, jar);
+    }
+    let cookies = jar.get(origin);
+    if (!cookies) {
+      cookies = {};
+      jar.set(origin, cookies);
+    }
+    return cookies;
+  }
+
+  private signalPresent(url: string, page: MockPage | undefined, signal: PlatformSignal): boolean {
+    if (signal.kind === 'path') return globMatches(signal.glob, new URL(url).pathname);
+    return (page?.signals ?? []).some((candidate) => stableJson(candidate) === stableJson(signal));
+  }
+
+  private findRoute(site: MockSite | undefined, method: string, path: string): { handler: MockRoute; params: Record<string, string> } | null {
+    for (const [key, handler] of Object.entries(site?.api ?? {})) {
+      const [routeMethod, template] = key.split(' ');
+      if (routeMethod !== method) continue;
+      const names: string[] = [];
+      const source = template.replace(/\{([A-Za-z0-9_]+)\}/g, (_match, name: string) => {
+        names.push(name);
+        return '([^/]+)';
+      });
+      const match = new RegExp(`^${source}$`).exec(path);
+      if (match) return { handler, params: Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match[index + 1])])) };
+    }
+    return null;
+  }
+
+  private notify(event: NavigationEvent): void {
+    for (const listener of this.listeners) listener(event);
+  }
+
+  private short(url: string): string {
+    const parsed = new URL(url);
+    return `${parsed.host}${parsed.pathname}${parsed.search}`;
+  }
+}

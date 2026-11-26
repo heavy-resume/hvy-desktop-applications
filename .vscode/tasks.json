@@ -14,6 +14,30 @@
       "problemMatcher": []
     },
     {
+      "label": "HVY Galaxy: Audit Fix",
+      "type": "shell",
+      "command": "npm audit fix",
+      "windows": {
+        "command": "npm.cmd audit fix"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "HVY Galaxy: Audit Fix (Force)",
+      "type": "shell",
+      "command": "npm audit fix --force",
+      "windows": {
+        "command": "npm.cmd audit fix --force"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "HVY Galaxy: Tauri Dev (Hot Reload)",
       "type": "shell",
       "command": ". \"$HOME/.cargo/env\" && npm run tauri -- dev",
@@ -140,7 +164,7 @@
       "id": "hvyGalaxyVersion",
       "type": "promptString",
       "description": "HVY Galaxy version",
-      "default": "0.1.0-alpha.7"
+      "default": "0.1.0-alpha.8"
     }
   ]
 }

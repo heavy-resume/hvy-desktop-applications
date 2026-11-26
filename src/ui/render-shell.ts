@@ -2,22 +2,60 @@ import { getFileActionAvailability, isWorkspaceTemplatePath } from '../fileActio
 import type { HvyMode } from '../hvy';
 import { type AppState } from '../state';
 import { getDocumentColorsEnabled } from './render-theme';
+import { renderBackgroundActivityIndicator } from './render-background-activity';
 import { escapeAttr, escapeHtml } from './shared';
 
 export function renderDocumentTabs(state: AppState): string {
+  const needsYou = new Set(state.documentsNeedingYou);
   return `
     <nav class="document-tabs" aria-label="Open documents">
       <button type="button" class="hvy-galaxy-button icon-button document-tab-new" data-action="create-file" title="New HVY document" aria-label="New HVY document">+</button>
       ${state.documentTabs.map((tab) => `
-        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}">
-          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
+        <div class="document-tab${tab.active ? ' is-active' : ''}${tab.dirty ? ' is-dirty' : ''}${tab.readOnly ? ' is-read-only' : ''}${tab.hiddenFromAI ? ' is-hidden-from-ai' : ''}${needsYou.has(tab.sourcePath) ? ' needs-you' : ''}${scheduledJobClass(state, tab.documentId)}">
+          <button type="button" class="hvy-galaxy-button document-tab-main" data-action="select-document-tab" data-path="${escapeAttr(tab.versionId)}" title="${escapeAttr(scheduledJobTitle(state, tab.documentId, tab.sourcePath) ?? tab.sourcePath)}" aria-current="${tab.active ? 'page' : 'false'}">
             <span class="document-tab-dirty" aria-hidden="true"></span>
             <span class="document-tab-name">${escapeHtml(tab.name)}</span>
+            ${needsYou.has(tab.sourcePath) ? '<span class="document-tab-needs-you" title="Background work in this document needs you" aria-label="needs you">!</span>' : ''}
           </button>
           <button type="button" class="hvy-galaxy-button document-tab-close" data-action="close-document-tab" data-path="${escapeAttr(tab.versionId)}" title="Close ${escapeAttr(tab.name)}" aria-label="Close ${escapeAttr(tab.name)}">&times;</button>
         </div>
       `).join('')}
+      ${renderRecentTabs(state)}
     </nav>`;
+}
+
+/** A tab a scheduled job is running in: busy until its document is idle, or marked with the job's problem. */
+function scheduledJobClass(state: AppState, documentId: string): string {
+  const run = state.scheduledJobRuns[documentId];
+  return run ? (run.problem ? ' scheduled-job-problem' : ' scheduled-job-busy') : '';
+}
+
+function scheduledJobTitle(state: AppState, documentId: string, path: string): string | null {
+  const run = state.scheduledJobRuns[documentId];
+  return run ? `${run.job}: ${run.problem ?? 'running'} · ${path}` : null;
+}
+
+const RECENT_TAB_LIMIT = 10;
+
+/** Ghost tabs for recently opened files fill the strip's unused space; tabs that do not fit wrap out of view. */
+function renderRecentTabs(state: AppState): string {
+  const open = new Set(state.documentTabs.map((tab) => tab.sourcePath));
+  const dismissed = new Set(state.dismissedRecentTabs);
+  const recent = state.recent.files.filter((path) => !open.has(path) && !dismissed.has(path)).slice(0, RECENT_TAB_LIMIT);
+  if (recent.length === 0) return '';
+  return `
+      <div class="document-recent-tabs" aria-label="Recent documents">
+        ${recent.map((path) => {
+          const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+          return `
+        <div class="document-recent-tab">
+          <button type="button" class="hvy-galaxy-button document-recent-tab-main" data-action="open-recent-tab" data-path="${escapeAttr(path)}" title="${escapeAttr(path)}">
+            <span class="document-tab-name">${escapeHtml(name)}</span>
+          </button>
+          <button type="button" class="hvy-galaxy-button document-tab-close" data-action="dismiss-recent-tab" data-path="${escapeAttr(path)}" title="Remove" aria-label="Remove ${escapeAttr(name)} from recent tabs">&times;</button>
+        </div>`;
+        }).join('')}
+      </div>`;
 }
 
 export function renderTabStackPopover(state: AppState): string {
@@ -52,6 +90,7 @@ export function renderToolbar(state: AppState): string {
         <span>${escapeHtml(state.workspaceChat.scopeLabel || 'Workspace chat')}</span>
       </div>
       <div class="toolbar-actions">
+        ${renderBackgroundActivityIndicator(state)}
         <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
         <button class="hvy-galaxy-button" type="button" data-action="save-workspace-chat" ${state.workspaceChat.messages.length === 0 || state.busy ? 'disabled' : ''}>Save Chat</button>
         <button class="hvy-galaxy-button" type="button" data-action="close-workspace-chat">Close</button>
@@ -69,6 +108,7 @@ export function renderToolbar(state: AppState): string {
       <span>${document.readOnly ? 'Read-only document' : document.virtual === 'versionHistory' ? 'History snapshot — saves as new document' : document.virtual === 'recoveryDraft' ? 'Recovered unsaved copy' : document.hiddenFromAI ? 'Hidden from AI' : document.isNew ? 'Unsaved document' : 'Document'}</span>
     </div>
     <div class="toolbar-actions">
+      ${renderBackgroundActivityIndicator(state)}
       <span class="dirty-indicator" data-state="${dirtyState}">${dirtyLabel}</span>
       <label class="document-color-toggle">
         <input class="hvy-galaxy-input" type="checkbox" data-field="use-document-colors" ${documentColorsEnabled ? 'checked' : ''} ${documentColorsEditable ? '' : 'disabled'}>

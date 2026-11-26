@@ -1,0 +1,467 @@
+.hvy-web-automation-text {
+  margin: 0;
+}
+
+/* A run's line names its page, whose address may be long and unbroken. */
+.hvy-web-automation-status {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.hvy-web-automation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* A status at the left and its buttons at the right, on one row (they wrap under it when narrow). */
+.hvy-web-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+/* No margin of its own: the document reader gives each paragraph in a block one (.hvy-document .reader-block p), which
+   these classes outrank, so the row is as tall as its buttons. */
+.hvy-web-status-row > .hvy-web-automation-text.hvy-web-automation-status {
+  margin: 0;
+}
+
+/* The queue's entries: long while a run of evaluations waits, so it scrolls. */
+.hvy-web-queue-entries {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.hvy-web-queue-entry {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-automation-entry {
+  overflow-wrap: anywhere;
+}
+
+.hvy-web-pages {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hvy-web-pages-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Above the start pages: what acts on the pages ticked, and the default limits on the right. */
+.hvy-web-pages-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* The start pages as a table: a column for each part, lined up across rows (each row's cells are the grid's). */
+.hvy-web-pages-table {
+  display: grid;
+  grid-template-columns: auto minmax(0, 2fr) minmax(0, 1.5fr) auto;
+  /* Many pages scroll inside it, about ten rows showing, rather than pushing the document down. */
+  max-height: 34rem;
+  overflow-y: auto;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-pages-row {
+  display: contents;
+}
+
+/* A page's cell breaks a long address anywhere, so its column, not the table, gives way. */
+.hvy-web-pages-cell {
+  display: grid;
+  align-content: center;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--hvy-border, #c9c3b8);
+}
+
+/* A cell's lines sit close, so a row is about as tall as its buttons: the document reader gives each paragraph in a block a
+   bottom margin and a roomy line height (.hvy-document .reader-block p), which this outranks with classes alone. */
+.hvy-web-pages-table .hvy-web-pages-cell > .hvy-web-automation-text {
+  margin: 0;
+  line-height: 1.35;
+}
+
+.hvy-web-pages-heading .hvy-web-pages-cell {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-top: 0;
+  border-bottom: 1px solid var(--hvy-border, #c9c3b8);
+  background: var(--hvy-surface, #fff);
+}
+
+/* Under the pinned headings' line, the first page needs no line of its own. */
+.hvy-web-pages-heading + .hvy-web-pages-row .hvy-web-pages-cell {
+  border-top: 0;
+}
+
+.hvy-web-pages-head {
+  font-size: 0.8rem;
+  font-weight: 650;
+  opacity: 0.75;
+}
+
+.hvy-web-pages-actions {
+  justify-content: end;
+}
+
+.hvy-web-page-values {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+.hvy-web-page-hint {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.hvy-web-page-name {
+  font-weight: 650;
+}
+
+/* Edit Page: no taller than most of the window (it scrolls inside), with Copy setup in its top right corner. */
+.dialog.hvy-web-edit-page-dialog {
+  position: relative;
+  max-height: 80vh;
+}
+
+.hvy-web-dialog-corner {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+}
+
+/* Its icon centered: an icon button's bottom padding is for a text glyph's baseline, which an SVG icon doesn't have. */
+.icon-button.hvy-web-dialog-corner {
+  padding: 0;
+}
+
+/* A dialog's title may be a page's address, long and unbroken: it wraps, so the dialog keeps its width. */
+.hvy-web-dialog-title {
+  overflow-wrap: anywhere;
+}
+
+.hvy-web-dialog-body {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.hvy-web-page-result {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.hvy-web-page-result:empty {
+  display: none;
+}
+
+.hvy-web-page-setup {
+  display: grid;
+  gap: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
+/* Its display would otherwise show a hidden one (a start page with no fields left to fill). */
+.hvy-web-page-values[hidden] {
+  display: none;
+}
+
+/* A reader with nothing to show (an idle queue) hides; its card's display would otherwise keep an empty box. */
+.hvy-web-automation[hidden] {
+  display: none;
+}
+
+/* A start page's progress while a run goes: it changes, so it stands out from the start page's other details. */
+.hvy-web-page-progress {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.hvy-web-page-include {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.hvy-web-page-needs-you {
+  color: var(--hvy-warning-text, #8a4d00);
+}
+
+/* Something here waits for the user (a page to deal with, a sign-in): highlighted beside the block that needs them. */
+.hvy-web-needs-you {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--hvy-warning-border, var(--hvy-warning, #d47a00));
+  border-radius: 0.5rem;
+  background: var(--hvy-warning-bg, #fff4e0);
+  color: var(--hvy-warning-text, #8a4d00);
+}
+
+/* A few soft rings when the notice first appears; then it stays still. */
+.hvy-web-needs-you.is-pulsing {
+  animation: hvy-web-needs-you-pulse 1.2s ease-out 3;
+}
+
+@keyframes hvy-web-needs-you-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--hvy-warning, #d47a00);
+  }
+  100% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hvy-web-needs-you.is-pulsing {
+    animation: none;
+  }
+}
+
+/* The Web API block's editor: its configuration's JSON parts (an endpoint's inputs and more) read as code. */
+.hvy-web-json {
+  font-family: var(--hvy-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.85rem;
+  resize: vertical;
+}
+
+/* In the editor, a block's settings above its reader. */
+.hvy-web-editor-stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.hvy-web-config-editor .hvy-web-page-values {
+  display: grid;
+  gap: 0.6rem;
+}
+
+/* Paste site setup: where the clipboard cannot be read directly, a place to paste into that is not a text box. */
+.hvy-web-paste-zone {
+  display: grid;
+  place-items: center;
+  min-height: 5rem;
+  padding: 1rem;
+  border: 2px dashed var(--hvy-border, #c9c3b8);
+  border-radius: 0.6rem;
+  color: var(--hvy-text-alt, #394744);
+  text-align: center;
+  cursor: default;
+}
+
+.hvy-web-paste-zone:focus {
+  border-color: var(--hvy-accent-1, #477d7c);
+  outline: none;
+}
+
+.hvy-web-paste-zone[hidden] {
+  display: none;
+}
+
+/* Each page a pasted setup carries: its address, then its defaults. */
+.hvy-web-paste-page {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+}
+
+/* What a pasted setup holds, behind "Show details". */
+.hvy-web-paste-details .hvy-web-json {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre;
+}
+
+/* A run's "with problems" count: opens the list of them. */
+.hvy-web-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--hvy-link-color, #2f6968);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The pages a run couldn't read, in its problems dialog: long after a run on a changed site, so it scrolls. */
+.hvy-web-problems {
+  display: grid;
+  gap: 0.5rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.hvy-web-problem {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.6rem;
+  border: 1px solid var(--hvy-border, #c9c3b8);
+  border-radius: 0.45rem;
+}
+
+/* A problem page's address, in the theme's link colors (the dialog is outside the document). */
+.hvy-web-problem-link {
+  color: var(--hvy-link-color, #2f6968);
+}
+
+.hvy-web-problem-link:hover {
+  color: var(--hvy-link-hover-color, var(--hvy-link-color, #2f6968));
+}
+
+/* Adding a problem page to its site setup: a button under its reason, not stretched across the entry. */
+.hvy-web-problem-action {
+  justify-self: start;
+}
+
+/* A schedule block's jobs: each its checkbox and name, then how often it runs, on one line; its status under them. */
+.hvy-web-schedule {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.hvy-web-schedule-jobs {
+  display: grid;
+}
+
+.hvy-web-schedule-job {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.15rem;
+  padding: 0.4rem 0;
+}
+
+/* Jobs apart by a line, not each in a box of its own. */
+.hvy-web-schedule-job + .hvy-web-schedule-job {
+  border-top: 1px solid var(--hvy-border, #c9c3b8);
+}
+
+/* The checkbox before its name, with room between them. */
+.hvy-web-schedule-job .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* "Scheduled jobs", then what is in effect: the job that runs next, its last turn and its next. */
+.hvy-web-schedule-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 1rem;
+}
+
+.hvy-web-schedule-status {
+  margin: 0;
+}
+
+/* A paused job's reason, after its controls. */
+.hvy-web-schedule-turn {
+  margin: 0;
+}
+
+/* Run now, at the end of its job's line. */
+.hvy-web-schedule-run {
+  margin-left: auto;
+}
+
+/* "every [6] [hours] (default …)" and "Wait until idle [5] min": short controls on one line. */
+.hvy-web-schedule-frequency {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+/* Narrower and shorter than Galaxy's inputs, which fill their row (base.css): as specific as that rule, and more. A
+   number with no spinner: typing and the arrow keys still change it. */
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every:not([type="checkbox"]) {
+  width: 3.5rem;
+  padding-block: 0.2rem;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every::-webkit-inner-spin-button,
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-every::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-select {
+  width: auto;
+  padding-block: 0.2rem;
+}
+
+.hvy-web-schedule-frequency .hvy-galaxy-input.hvy-web-schedule-time:not([type="checkbox"]) {
+  width: auto;
+  padding-block: 0.2rem;
+}
+
+/* The days a time of day runs on: each a checkbox before its name, close together. */
+.hvy-web-schedule-days {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+}
+
+.hvy-web-schedule-days .checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* The document's wait (for all its jobs) at the start of the line Cancel and Apply end. */
+.hvy-web-schedule-idle {
+  margin-right: auto;
+}
+
+.hvy-web-schedule-actions {
+  align-items: center;
+}
+
+/* "Not applied yet", just before Cancel and Apply. */
+.hvy-web-schedule-pending {
+  margin: 0;
+}
+
+/* A page's checks in its dialog (and the defaults): "Check" beside the control a scheduled job uses. */
+.hvy-web-check-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Keeps a button's room without showing it (the Web API block's row while it checks the account). */
+.hvy-web-placeholder {
+  visibility: hidden;
+}

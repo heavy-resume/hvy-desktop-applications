@@ -1,8 +1,9 @@
 import { markdownToReaderHtml, normalizeMarkdownLists } from '../../../heavy-file-format/src/markdown';
 import type { HvyDocumentSearchMode, SearchFilterMode } from '../../../heavy-file-format/src/search/types';
-import { type AiSettings, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
+import { type AiSettings, type DocumentExtension, type Workspace, type WorkspaceTemplateVisibility, type WorkspaceTreeNode } from '../backend';
 import { currentDocumentWorkspacePath } from '../fileActions';
-import { savedVersionDocumentName } from '../mainUtilities';
+import { findEncryptedFolder, workspaceHasLogicalName } from '../encryptedFolders';
+import { documentFileName, documentTypeForExtension, savedVersionDocumentName } from '../mainUtilities';
 import { workspacePathForFileInWorkspaces, type AppState, type WorkspaceFilterState } from '../state';
 import { workspaceTemplateVisibility } from '../templates';
 import { closeIcon, eyeIcon, funnelIcon, gearIcon, sparklesIcon } from './render-shell';
@@ -210,22 +211,40 @@ export function renderRenameFileDialog(state: AppState): string {
     </div>`;
 }
 
-export function renderRenameEncryptedFolderDialog(state: AppState): string {
-  if (!state.renameEncryptedFolderWorkspacePath || !state.renameEncryptedFolderDirectory || !state.renameEncryptedFolderCurrentName) return '';
+export function renderRenameFolderDialog(state: AppState): string {
+  if (!state.renameFolderWorkspacePath || !state.renameFolderDirectory || !state.renameFolderCurrentName) return '';
   return `
     <div class="modal-backdrop" role="presentation">
-      <form class="dialog" data-form="rename-encrypted-folder">
-        <h2>Rename Encrypted Folder</h2>
-        <p class="dialog-note">Only encrypted folder metadata changes. The opaque filesystem directory name remains the same.</p>
+      <form class="dialog" data-form="rename-folder">
+        <h2>${state.renameFolderEncrypted ? 'Rename Encrypted Folder' : 'Rename Folder'}</h2>
+        ${state.renameFolderEncrypted ? '<p class="dialog-note">Only encrypted folder metadata changes. The opaque filesystem directory name remains the same.</p>' : ''}
         <label>
           <span>Name</span>
-          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" value="${escapeAttr(state.renameEncryptedFolderCurrentName)}" required>
+          <input class="hvy-galaxy-input" name="folderName" type="text" autocomplete="off" value="${escapeAttr(state.renameFolderCurrentName)}" required>
         </label>
         <div class="dialog-actions">
-          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-encrypted-folder">Cancel</button>
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-rename-folder">Cancel</button>
           <button class="hvy-galaxy-button" type="submit" ${state.busy ? 'disabled' : ''}>Rename</button>
         </div>
       </form>
+    </div>`;
+}
+
+export function renderArchiveFileDialog(state: AppState): string {
+  if (!state.archiveFilePath || !state.archiveFileName) {
+    return '';
+  }
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="dialog archive-file-dialog" role="dialog" aria-modal="true" aria-labelledby="archiveFileTitle">
+        <h2 id="archiveFileTitle">Archive file?</h2>
+        <p class="dialog-note">${escapeHtml(state.archiveFileName)} will be archived.</p>
+        ${state.archiveFileUnsaved ? '<p class="dialog-note">It has unsaved changes that will be discarded.</p>' : ''}
+        <div class="dialog-actions">
+          <button class="hvy-galaxy-button" type="button" data-action="cancel-archive-file">Cancel</button>
+          <button type="button" class="hvy-galaxy-button" data-action="archive-file" ${state.busy ? 'disabled' : ''}>Archive</button>
+        </div>
+      </section>
     </div>`;
 }
 
@@ -476,7 +495,7 @@ export function renderSaveAsDialog(state: AppState): string {
   const sourceDirectory = relativePath.includes('/') ? relativePath.slice(0, relativePath.lastIndexOf('/')) : '';
   const targetDirectory = sourceDirectory === 'templates' || sourceDirectory.startsWith('templates/') ? '' : sourceDirectory;
   const sourceName = state.document.historySourceName ?? state.document.source.name;
-  const name = state.document.isNew ? '' : template
+  const name = state.document.isNew ? state.saveAsSuggestedName : template
     ? sourceName.replace(/\.(t?hvy|phvy|md)$/i, '')
     : displayDocumentName(state.document.virtual === 'versionHistory' ? savedVersionDocumentName(sourceName) : sourceName);
   return `
@@ -491,9 +510,10 @@ export function renderSaveAsDialog(state: AppState): string {
             <option value=".phvy" ${state.document.source.extension === '.phvy' ? 'selected' : ''}>PHVY template (.phvy)</option>
           </select>
         </label>` : ''}
-        ${template || workspaceActive ? `<label>
+        ${template || workspaceActive ? `<label class="save-as-name-field">
           <span>Name</span>
           <input class="hvy-galaxy-input" name="${template ? 'templateName' : 'fileName'}" type="text" autocomplete="off" value="${escapeAttr(name)}" required autofocus>
+          ${template ? '' : renderSaveAsRenamePopover(saveAsRenamedFileName(workspaces, selectedWorkspacePath ?? '', targetDirectory, name, state.document.source.extension))}
         </label>` : ''}
         ${template ? `<label>
           <span>Save location</span>
@@ -518,6 +538,47 @@ export function renderSaveAsDialog(state: AppState): string {
         </div>
       </form>
     </div>`;
+}
+
+/** The numbered name the backend will save under when this name is already taken in the destination folder. */
+export function saveAsRenamedFileName(
+  workspaces: Workspace[],
+  workspacePath: string,
+  targetDirectory: string,
+  name: string,
+  extension: DocumentExtension,
+): { fileName: string; renamed: string } | null {
+  const workspace = workspaces.find((candidate) => candidate.path === workspacePath);
+  const fileName = documentFileName(name, documentTypeForExtension(extension));
+  // Outside encrypted folders the backend moves an archived occupant aside, so only live files force a rename.
+  const ignoreArchived = !findEncryptedFolder(workspace, targetDirectory);
+  if (!fileName || !workspaceHasLogicalName(workspace, targetDirectory, fileName, '', { ignoreArchived })) return null;
+  const dot = fileName.lastIndexOf('.');
+  const stem = fileName.slice(0, dot);
+  const fileExtension = fileName.slice(dot);
+  let index = 2;
+  while (workspaceHasLogicalName(workspace, targetDirectory, `${stem} ${index}${fileExtension}`)) index += 1;
+  return { fileName, renamed: `${stem} ${index}${fileExtension}` };
+}
+
+function saveAsRenameMessage(rename: { fileName: string; renamed: string }): string {
+  return `${rename.fileName} already exists here. It will be saved as ${rename.renamed}.`;
+}
+
+export function renderSaveAsRenamePopover(rename: { fileName: string; renamed: string } | null): string {
+  return `<span class="save-as-rename-popover" role="status" ${rename ? '' : 'hidden'}>${rename ? escapeHtml(saveAsRenameMessage(rename)) : ''}</span>`;
+}
+
+export function syncSaveAsRenamePopover(form: HTMLFormElement, state: AppState): void {
+  const popover = form.querySelector<HTMLElement>('.save-as-rename-popover');
+  const input = form.querySelector<HTMLInputElement>('input[name="fileName"]');
+  const destination = form.querySelector<HTMLInputElement>('input[name="workspaceDestination"]:checked');
+  if (!popover || !input || !state.document) return;
+  const rename = destination
+    ? saveAsRenamedFileName(state.workspaces, destination.dataset.workspacePath ?? '', destination.dataset.targetDirectory ?? '', input.value, state.document.source.extension)
+    : null;
+  popover.hidden = !rename;
+  popover.textContent = rename ? saveAsRenameMessage(rename) : '';
 }
 
 export function renderSaveAsKindControl(activeKind: AppState['saveAsKind'], templateDisabled: boolean): string {

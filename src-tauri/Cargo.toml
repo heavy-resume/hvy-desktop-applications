@@ -1,6 +1,6 @@
 [package]
 name = "hvy-galaxy"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 description = "HVY Galaxy desktop app"
 authors = ["HVY"]
 edition = "2021"
@@ -15,14 +15,19 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
+# Reads and writes copied files on the system clipboard (CF_HDROP on Windows, NSPasteboard on macOS).
+arboard = { version = "3.7", default-features = false }
 base64 = "0.22"
 glob = "0.3"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 pdf-extract = "0.10"
 quick-xml = "0.36"
+reqwest = "0.13"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The SHA-256 fingerprint of a site's certificate (site_security.rs); already built in through other dependencies.
+sha2 = "0.10"
 tauri = { version = "2", features = ["unstable"] }
 thiserror = "2"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
@@ -31,12 +36,17 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 libc = "0.2"
 objc2 = "0.6.2"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSWindow"] }
-objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo", "NSString", "NSUserDefaults"] }
+objc2-foundation = { version = "0.3.2", features = ["NSDictionary", "NSError", "NSObject", "NSProcessInfo", "NSString", "NSUserDefaults"] }
+objc2-web-kit = { version = "0.3.2", features = ["block2", "objc2-app-kit", "WKContentWorld", "WKFrameInfo", "WKScriptMessage", "WKScriptMessageHandler", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKPreferences", "WKNavigationDelegate", "objc2-security"] }
+# The certificate a site presented to an integration browser (site_security.rs): its WebKit view's server trust.
+objc2-security = { version = "0.3.2", default-features = false, features = ["std", "SecBase", "SecCertificate", "SecTrust"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFData"] }
+block2 = "0.6.2"
 security-framework = "3.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "0.38"
-windows-core = "0.61"
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [dev-dependencies]
 tempfile = "3"

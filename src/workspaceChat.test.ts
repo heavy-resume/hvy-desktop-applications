@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { FileKey } from './runtimeDocuments';
 import {
   buildWorkspaceChatContext,
   buildWorkspaceCitationRepairPrompt,
@@ -51,7 +52,7 @@ describe('workspace chat helpers', () => {
       documentId: 'document:chat',
       versionId: 'version:chat',
       source: {
-        documentId: 'document:chat',
+        documentId: 'document:chat' as FileKey,
         workingVersionId: 'version:chat',
         path: '/tmp/work/Projects/Chat.hvy',
         name: 'Chat.hvy',

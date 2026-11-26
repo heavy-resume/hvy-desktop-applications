@@ -1,6 +1,9 @@
+import { withoutScheduledDocumentsIn } from './webAutomation/scheduleSettings';
+import { pathForFileKey } from './runtimeDocuments';
+import { updateScheduledDocuments } from './webAutomation/scheduleStore';
 import { rememberExampleTemplate } from './templateExampleContent';
 import { templateExampleDirectory } from './templateExamples';
-import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
+import { addDroppedFilesToWorkspace, addFilesToWorkspace, archiveWorkspace, createDocumentFile, createEncryptedFolderChild, createEncryptedFolderDocument, createWorkspace, createWorkspaceFolder, deleteEncryptedFolderChild, deleteWorkspaceFolder, initializeWorkspacePath, loadArchivedWorkspaces, openDocumentFile, openImportSourceDialog, readDocumentFile, readSidecarFileBytes, renameWorkspace, renameWorkspaceFolder, saveDocumentFile, saveWorkspaceOrder, selectWorkspaceDocumentFiles, unarchiveWorkspace, updateEncryptedFolderManifest, updateWorkspaceAiAccess, updateWorkspaceFolderAiAccess, type DocumentFile, type DroppedWorkspaceFile, type WorkspaceFileNode, type WorkspaceTreeNode } from './backend';
 import { measureDebugAsync } from './debugLog';
 import { embeddingSidecarPath } from './embeddingIndex';
 import { currentDocumentWorkspacePath } from './fileActions';
@@ -9,9 +12,9 @@ import { documentEncryptionKeyring, generateStoredDocumentKey } from './document
 import { encryptedFolderIdFromPhysicalName, encryptFolderManifest, findEncryptedFolder, prepareEncryptedFolderChildMutation, prepareEncryptedFolderDocumentMutation, prepareEncryptedFolderEntryAIAccessMutation, prepareEncryptedFolderEntryRemoval, prepareEncryptedFolderEntryRename, prepareEncryptedFolderImportedDocumentMutation, prepareEncryptedFolderSelfAIAccessMutation, prepareEncryptedFolderSelfRename, workspaceHasLogicalName } from './encryptedFolders';
 import { findFileInWorkspace, state } from './state';
 import { cancelCloseWorkspaceChat, cancelWorkspaceChatIndexing, currentWorkspaceChatDocumentPath, discardWorkspaceChat, openWorkspaceChat, requestCloseWorkspaceChat, resolveWorkspaceHref, saveWorkspaceChat, submitWorkspaceChat, updateWorkspaceChatDraft } from './workspaceChat';
-import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, type WorkspaceOrderSort } from './main';
+import { activateWorkspaceChatDocument, pendingMountDocument, refreshRecents, refreshArchivedWorkspaces, submitWorkspaceFilter, clearWorkspaceFilter, importedTemplateOutputExtension, importSourceFrom, openDocument, updateCurrentDocumentSession, clearWorkspaceFilterDocumentCache, pathStartsWithWorkspace, mountCurrentDocument, ensureCurrentDocumentMounted, setDocumentDirty, clearRecoveryDraftsForDocument, refreshOpenWorkspaceForFile, saveImportedDocumentToWorkspace, createTemporaryImportMount, finishAddingFilesToWorkspace, relocateFiles, droppedWorkspaceFilesFrom, loadWorkspace, showWorkspaceDocumentsView, refreshSavedTemplates, creationTemplate, isBlankCreationTemplate, upsertWorkspace, reorderedWorkspaceEntries, sortedWorkspaceEntries, syncMcpWorkspaces, syncOpenDocumentAiAccess, hasOpenWorkspaceNamed, rerender, runBusy, documentFileName, workspaceRootDocumentFileName, hasInvalidDocumentNameSyntax, documentTypeForExtension, documentTitle, closeUiBeforeWorkspaceFilter, normalizeAiMaxContextChars, createWorkspaceInChosenFolder, removeDocumentTabPath, preserveCurrentDocumentSession, type WorkspaceOrderSort } from './main';
 import type { UiHandlers } from './ui';
-import { saveWorkspaceExpansionState } from './workspaceExpansionState';
+import { normalizeFolderPath, relocatedFolderExpansion, saveWorkspaceExpansionState, saveWorkspaceFolderExpansionState } from './workspaceExpansionState';
 
 export function createWorkspaceHandlers(): Partial<UiHandlers> {
   const applyEncryptedAIAccess = async (prompt: NonNullable<typeof state.encryptedAIAccessPrompt>, allowed: boolean): Promise<void> => {
@@ -138,36 +141,43 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     state.selectedWorkspacePath = workspacePath;
     state.status = `Created ${trimmed}`;
   }),
-  renameEncryptedFolder: (workspacePath, targetDirectory, currentName) => {
-    state.renameEncryptedFolderWorkspacePath = workspacePath;
-    state.renameEncryptedFolderDirectory = targetDirectory;
-    state.renameEncryptedFolderCurrentName = currentName;
+  renameFolder: (workspacePath, targetDirectory, currentName, encrypted) => {
+    state.renameFolderWorkspacePath = workspacePath;
+    state.renameFolderDirectory = targetDirectory;
+    state.renameFolderCurrentName = currentName;
+    state.renameFolderEncrypted = encrypted;
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
-  submitRenameEncryptedFolder: (name) => void runBusy('Renaming encrypted folder...', async () => {
-    const workspacePath = state.renameEncryptedFolderWorkspacePath;
-    const targetDirectory = state.renameEncryptedFolderDirectory;
-    const currentName = state.renameEncryptedFolderCurrentName;
+  submitRenameFolder: (name) => void runBusy('Renaming folder...', async () => {
+    const workspacePath = state.renameFolderWorkspacePath;
+    const targetDirectory = state.renameFolderDirectory;
+    const currentName = state.renameFolderCurrentName;
+    const encrypted = state.renameFolderEncrypted;
     const trimmed = name.trim();
     if (!workspacePath || !targetDirectory || !currentName) return;
     if (!trimmed) throw new Error('Folder name is required.');
     if (trimmed === currentName) {
-      state.renameEncryptedFolderWorkspacePath = null;
-      state.renameEncryptedFolderDirectory = '';
-      state.renameEncryptedFolderCurrentName = null;
+      closeRenameFolder();
       return;
     }
     const workspace = state.workspaces.find((candidate) => candidate.path === workspacePath);
-    const folder = findEncryptedFolder(workspace, targetDirectory);
-    if (!workspace || !folder) throw new Error('Encrypted folder was not found.');
-    const parts = targetDirectory.replaceAll('\\', '/').split('/');
-    const entryId = encryptedFolderIdFromPhysicalName(parts.pop() ?? '');
+    const parts = normalizeFolderPath(targetDirectory).split('/');
+    const physicalName = parts.pop() ?? '';
     const parentDirectory = parts.join('/');
-    const parent = findEncryptedFolder(workspace, parentDirectory);
     if (workspaceHasLogicalName(workspace, parentDirectory, trimmed, targetDirectory)) {
       throw new Error(`A file or folder named ${trimmed} already exists in this folder.`);
     }
+    if (!encrypted) {
+      await renamePlainWorkspaceFolder(workspacePath, targetDirectory, parentDirectory, trimmed);
+      closeRenameFolder();
+      state.status = `Renamed to ${trimmed}`;
+      return;
+    }
+    const folder = findEncryptedFolder(workspace, targetDirectory);
+    if (!workspace || !folder) throw new Error('Encrypted folder was not found.');
+    const entryId = encryptedFolderIdFromPhysicalName(physicalName);
+    const parent = findEncryptedFolder(workspace, parentDirectory);
     const mutation = parent
       ? await prepareEncryptedFolderEntryRename(parent, entryId, trimmed, documentEncryptionKeyring())
       : await prepareEncryptedFolderSelfRename(folder, trimmed, documentEncryptionKeyring());
@@ -177,16 +187,12 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       previousManifestBytes: mutation.previousManifestBytes,
       manifestBytes: mutation.manifestBytes,
     });
-    state.renameEncryptedFolderWorkspacePath = null;
-    state.renameEncryptedFolderDirectory = '';
-    state.renameEncryptedFolderCurrentName = null;
+    closeRenameFolder();
     upsertWorkspace(updated);
     state.status = `Renamed to ${trimmed}`;
   }, { preserveMountedDocument: true }),
-  cancelRenameEncryptedFolder: () => {
-    state.renameEncryptedFolderWorkspacePath = null;
-    state.renameEncryptedFolderDirectory = '';
-    state.renameEncryptedFolderCurrentName = null;
+  cancelRenameFolder: () => {
+    closeRenameFolder();
     state.status = 'Ready';
     rerender({ preserveMountedDocument: true });
   },
@@ -236,6 +242,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         : await deleteWorkspaceFolder({ workspacePath, targetDirectory });
       upsertWorkspace(await loadWorkspace(workspace.path));
       clearWorkspaceFilterDocumentCache(workspace.path);
+      // Its documents' jobs stop with it.
+      updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(pathForFileKey(file), `${workspacePath}/${targetDirectory}`)));
       await refreshSavedTemplates(workspace.path);
       await refreshRecents();
       state.status = `Deleted ${targetDirectory.split('/').filter(Boolean).at(-1) ?? 'folder'}`;
@@ -325,6 +333,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     delete state.workspaceExpanded[path];
     delete state.workspaceFolderExpanded[path];
     saveWorkspaceExpansionState(state.workspaceExpanded);
+    saveWorkspaceFolderExpansionState(state.workspaceFolderExpanded);
     clearWorkspaceFilterDocumentCache(path);
     if (state.workspaceFilter.workspacePath === path) {
       state.workspaceFilter.open = false;
@@ -336,6 +345,8 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     if (state.selectedFilePath && pathStartsWithWorkspace(state.selectedFilePath, path)) {
       state.selectedFilePath = null;
     }
+    // Its documents' jobs stop with it.
+    updateScheduledDocuments((documents) => withoutScheduledDocumentsIn(documents, (file) => pathStartsWithWorkspace(pathForFileKey(file), path)));
     syncMcpWorkspaces();
     state.archivedWorkspaces = await loadArchivedWorkspaces();
     state.workspaceManagerOpen = true;
@@ -480,10 +491,11 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     example.meta.title = `Example ${index}`;
     const bytes = await serializeHvy(example);
     const file = await createDocumentFile({ workspacePath, relativePath, template: '', bytes: Array.from(bytes) });
+    await relocateFiles(file.relocatedArchivedFiles);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.workspaceFileViews[workspacePath] = 'templates';
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file);
+    await openDocument(file, { created: true });
     state.status = `Created ${file.name}`;
   }),
   setNewDocumentType: (type) => {
@@ -496,6 +508,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     const extension = state.newDocumentType === 'phvy' ? '.phvy' : state.newDocumentType === 'thvy' ? '.thvy' : '.hvy';
     const fileName = `Untitled${extension}`;
     const template = creationTemplate(workspacePath, state.newDocumentType, templateId, 'Untitled');
+    const blank = isBlankCreationTemplate(workspacePath, state.newDocumentType, templateId);
     state.newDocumentWorkspacePath = null;
     state.newDocumentDirectory = '';
     state.selectedWorkspacePath = workspacePath;
@@ -504,7 +517,7 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
       name: fileName,
       extension,
       bytes: Array.from(new TextEncoder().encode(template)),
-    }, { isNew: true, deferMount: true });
+    }, { isNew: true, deferMount: true, ...(blank ? { initialMode: 'editor' as const } : {}) });
     state.status = 'Created untitled document';
   }),
   cancelNewDocument: () => {
@@ -632,9 +645,10 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
         relativePath: targetDirectory ? `${targetDirectory}/${fileName}` : fileName,
         template,
       });
+    await relocateFiles(file.relocatedArchivedFiles);
     upsertWorkspace(await loadWorkspace(workspacePath));
     state.selectedWorkspacePath = workspacePath;
-    await openDocument(file, { deferMount: true });
+    await openDocument(file, { deferMount: true, created: true });
     rerender();
     await mountCurrentDocument(pendingMountDocument ?? undefined);
     if (!state.document?.mounted) return;
@@ -893,11 +907,12 @@ export function createWorkspaceHandlers(): Partial<UiHandlers> {
     rerender({ preserveMountedDocument: true });
   },
   setWorkspaceFolderExpanded: (workspacePath, relativePath, expanded) => {
-    const normalizedPath = relativePath.replaceAll('\\', '/').replace(/^\/+|\/+$/g, '');
+    const normalizedPath = normalizeFolderPath(relativePath);
     state.workspaceFolderExpanded[workspacePath] = {
       ...(state.workspaceFolderExpanded[workspacePath] ?? {}),
       [normalizedPath]: expanded,
     };
+    saveWorkspaceFolderExpansionState(state.workspaceFolderExpanded);
   },
   closeWorkspaceFilter: () => {
     state.workspaceFilter.open = false;
@@ -1116,4 +1131,32 @@ async function refreshWorkspaceEmbeddingPreview(workspacePath: string): Promise<
 
 function flattenWorkspaceFilesForEmbeddingPreview(nodes: WorkspaceTreeNode[]): WorkspaceFileNode[] {
   return nodes.flatMap((node) => node.kind === 'file' ? [node] : flattenWorkspaceFilesForEmbeddingPreview(node.children));
+}
+
+function closeRenameFolder(): void {
+  state.renameFolderWorkspacePath = null;
+  state.renameFolderDirectory = '';
+  state.renameFolderCurrentName = null;
+  state.renameFolderEncrypted = false;
+}
+
+async function renamePlainWorkspaceFolder(workspacePath: string, targetDirectory: string, parentDirectory: string, name: string): Promise<void> {
+  preserveCurrentDocumentSession();
+  const currentPath = state.document?.virtual !== 'versionHistory' ? state.document?.source.path ?? null : null;
+  const mountedDocument = state.document?.mounted?.document ?? pendingMountDocument;
+  const { workspace, relocatedFiles } = await renameWorkspaceFolder({ workspacePath, targetDirectory, name });
+  await relocateFiles(relocatedFiles);
+  if (mountedDocument && relocatedFiles.some((file) => file.previousPath === currentPath)) {
+    updateCurrentDocumentSession(mountedDocument);
+  }
+  const folderExpanded = state.workspaceFolderExpanded[workspacePath];
+  if (folderExpanded) {
+    const nextDirectory = parentDirectory ? `${parentDirectory}/${name}` : name;
+    state.workspaceFolderExpanded[workspacePath] = relocatedFolderExpansion(folderExpanded, targetDirectory, nextDirectory);
+    saveWorkspaceFolderExpansionState(state.workspaceFolderExpanded);
+  }
+  clearWorkspaceFilterDocumentCache(workspacePath);
+  upsertWorkspace(workspace);
+  await refreshSavedTemplates(workspacePath);
+  await refreshRecents();
 }

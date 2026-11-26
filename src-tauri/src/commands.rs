@@ -208,7 +208,7 @@ fn open_plugin_builder_window(
     if let Some(window) = app.get_webview_window(PLUGIN_BUILDER_WINDOW_LABEL) {
         return raise_integration_window(&window.as_ref().window());
     }
-    let mut url = "plugin-builder.html".to_string();
+    let mut url = "pages/plugin-builder.html".to_string();
     if !workspace_paths.is_empty() || selected_workspace_path.is_some() {
         let mut query_url = tauri::Url::parse("http://plugin-builder.local/")
             .map_err(|error| AppError::Message(error.to_string()))?;
@@ -436,11 +436,6 @@ fn write_plugin_project_build(request: WritePluginProjectBuildRequest) -> AppRes
 }
 
 const INTEGRATION_BROWSER_LABEL: &str = "integration-browser";
-const INTEGRATION_TOOLBAR_HEIGHT: f64 = 52.0;
-#[cfg(target_os = "macos")]
-const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 15.0;
-#[cfg(not(target_os = "macos"))]
-const INTEGRATION_TOOLBAR_WINDOW_INSET: f64 = 0.0;
 const INTEGRATION_VAULT_SERVICE: &str = "com.heavyresume.hvy-galaxy.integration-vault";
 const INTEGRATION_VAULT_ACCOUNT: &str = "default";
 const INTEGRATION_VAULT_FILE: &str = "integration-cookie-vault-tauri.json";
@@ -457,6 +452,8 @@ const DEFAULT_INTEGRATION_PROFILE_ID: &str = "default-google";
 fn integration_result_is_background(result: &serde_json::Value) -> bool {
     result.get("kind").and_then(serde_json::Value::as_str).is_some_and(|kind| kind == "integration-ready-check-validation" || kind == "integration-page-readiness")
         || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-record-watch-result")
+        // Highlight matches' confidence, told as it is set: the page stays in front.
+        || result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-pattern-confidence")
         || (result.get("kind").and_then(serde_json::Value::as_str) == Some("integration-extraction")
         && (result.pointer("/context/mode").and_then(serde_json::Value::as_str) == Some("examples")
             || result.pointer("/context/foreground").and_then(serde_json::Value::as_bool) == Some(false)))
@@ -466,14 +463,61 @@ fn integration_result_is_background(result: &serde_json::Value) -> bool {
             && result.get("focusMainOnResult").and_then(serde_json::Value::as_bool) != Some(true))
 }
 
+/// What picking says, and its buttons, from the page's inspector, on the browser's toolbar.
+fn show_integration_toolbar_state(app: &AppHandle, profile_id: &str, state: &serde_json::Value) {
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
+    }
+}
+
+/// Picking cancelled in the page (Escape): told to Galaxy as a result, which ends the selection it waits for (the toolbar
+/// is the browser's again, and Galaxy comes forward).
+fn cancel_integration_inspection(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str) {
+    emit_integration_result(app, action_mode, profile_id, serde_json::json!({ "kind": "integration-inspection-cancelled" }));
+}
+
+/// A message Galaxy's scripts send from their own world (integration_world.rs): what the inspector's navigations say.
+fn receive_integration_page_message(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, text: &str) {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(text) else { return };
+    let value = message.get("value").cloned().unwrap_or_default();
+    match message.get("kind").and_then(serde_json::Value::as_str) {
+        Some("publish") => emit_integration_result(app, action_mode, profile_id, value),
+        Some("toolbar-state") => show_integration_toolbar_state(app, profile_id, &value),
+        Some("cancel") => cancel_integration_inspection(app, action_mode, profile_id),
+        Some("location") => show_integration_location(app, profile_id, value.as_str().unwrap_or_default()),
+        _ => {}
+    }
+}
+
+/// Where the page is now, as the page reports it moving without a page load (a single-page site going to another of its
+/// pages): the toolbar's address follows, and so does what the browser takes as its address. Only an address on the
+/// origin it loaded is taken, as no move without a load leaves it: a page can't make the toolbar show another site.
+fn show_integration_location(app: &AppHandle, profile_id: &str, href: &str) {
+    let Ok(url) = href.parse::<tauri::Url>() else { return };
+    let Ok(current) = integration_current_url(profile_id) else { return };
+    let Ok(mut current) = current.lock() else { return };
+    if current.as_ref().map(tauri::Url::origin) != Some(url.origin()) {
+        return;
+    }
+    *current = Some(url.clone());
+    let allowed = integration_allowed_origins(profile_id).ok().and_then(|origins| origins.lock().ok().map(|origins| origins.clone())).unwrap_or_default();
+    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+        let state = serde_json::json!({ "url": url.as_str(), "allowed": allowed });
+        let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
+    }
+}
+
 fn emit_integration_result(app: &AppHandle, action_mode: &AtomicBool, profile_id: &str, mut result: serde_json::Value) {
     if let Some(object) = result.as_object_mut() {
         object.insert("profileId".into(), serde_json::Value::String(profile_id.into()));
     }
     let is_background = integration_result_is_background(&result);
-    action_mode.store(false, Ordering::SeqCst);
-    if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
-        let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+    // A background result (such as the scan on each page load) doesn't end a selection the person is making.
+    if !is_background {
+        action_mode.store(false, Ordering::SeqCst);
+        if let Some(toolbar) = app.get_webview(&integration_toolbar_label(profile_id)) {
+            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
+        }
     }
     let _ = app.emit("integration-inspection-result", result);
     if !is_background {
@@ -521,6 +565,24 @@ static INTEGRATION_ACTION_MODES: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>
 static INTEGRATION_PENDING_EXTRACTIONS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<serde_json::Value>>>>>> = OnceLock::new();
 static INTEGRATION_ALLOWED_ORIGINS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>> = OnceLock::new();
 static INTEGRATION_CURRENT_URLS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<tauri::Url>>>>>> = OnceLock::new();
+static INTEGRATION_LAST_ALLOWED_URLS: OnceLock<Mutex<HashMap<String, Arc<Mutex<Option<tauri::Url>>>>>> = OnceLock::new();
+static INTEGRATION_INSPECTION_STARTS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+const DEFAULT_INTEGRATION_INSPECTION_START: &str = "window.__hvyGalaxyInspector?.start('parent', { primary: true, externalToolbar: true });";
+
+/// The picking the profile's browser last started (its `start` call), started again when a page loads while picking:
+/// a check that you're human passed, or a page that navigates on its own, keeps the same step and what it says.
+fn integration_inspection_start(profile_id: &str) -> String {
+    let starts = INTEGRATION_INSPECTION_STARTS.get_or_init(|| Mutex::new(HashMap::new()));
+    let starts = starts.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    starts.get(profile_id).cloned().unwrap_or_else(|| DEFAULT_INTEGRATION_INSPECTION_START.into())
+}
+
+fn remember_integration_inspection_start(profile_id: &str, start: String) {
+    let starts = INTEGRATION_INSPECTION_STARTS.get_or_init(|| Mutex::new(HashMap::new()));
+    starts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(profile_id.into(), start);
+}
+static INTEGRATION_MESSAGE_TOKENS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 #[derive(Clone, Default)]
 struct IntegrationPageContext {
     integration_id: Option<String>,
@@ -544,6 +606,44 @@ fn integration_current_url(profile_id: &str) -> AppResult<Arc<Mutex<Option<tauri
     let mut urls = INTEGRATION_CURRENT_URLS.get_or_init(|| Mutex::new(HashMap::new())).lock()
         .map_err(|error| AppError::Message(error.to_string()))?;
     Ok(urls.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone())
+}
+
+/// The last address the profile's integration browser's main page loaded inside its allowed origins: where it goes back
+/// to when the page heads off-site.
+fn integration_last_allowed_url(profile_id: &str) -> AppResult<Arc<Mutex<Option<tauri::Url>>>> {
+    let mut urls = INTEGRATION_LAST_ALLOWED_URLS.get_or_init(|| Mutex::new(HashMap::new())).lock()
+        .map_err(|error| AppError::Message(error.to_string()))?;
+    Ok(urls.entry(profile_id.into()).or_insert_with(|| Arc::new(Mutex::new(None))).clone())
+}
+
+/// The token the profile's integration browser takes messages with (hvy-integration:// navigations), as a CSRF token:
+/// the navigation handler hears every frame's navigations, and a frame the page embeds cannot read it. Random, for the
+/// app's run.
+fn integration_message_token(profile_id: &str) -> String {
+    let tokens = INTEGRATION_MESSAGE_TOKENS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut tokens = tokens.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    tokens.entry(profile_id.into())
+        .or_insert_with(|| Aes256Gcm::generate_nonce(&mut OsRng).iter().map(|byte| format!("{byte:02x}")).collect())
+        .clone()
+}
+
+const INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER: &str = "__HVY_GALAXY_MESSAGE_TOKEN__";
+
+/// A message to Galaxy (an hvy-integration:// navigation) as it is read, without its token: none without the profile's
+/// token.
+fn integration_message(url: &tauri::Url, profile_id: &str) -> Option<tauri::Url> {
+    let token = url.query_pairs().find(|(name, _)| name == "t").map(|(_, value)| value.into_owned());
+    if token.as_deref() != Some(integration_message_token(profile_id).as_str()) {
+        return None;
+    }
+    let mut message = url.clone();
+    message.set_query(None);
+    Some(message)
+}
+
+/// The inspector, with the profile's message token in it.
+fn integration_inspector_source(profile_id: &str) -> String {
+    INTEGRATION_INSPECTOR.replace(INTEGRATION_MESSAGE_TOKEN_PLACEHOLDER, &integration_message_token(profile_id))
 }
 
 fn integration_browser_label(profile_id: &str) -> String {
@@ -916,6 +1016,15 @@ fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
     if let Some(key) = cached_key.clone() {
         return Ok(key);
     }
+    let key = document_key_vault_secret(allow_interaction)?.map_err(|error| AppError::Message(error.to_string()))?;
+    if key.len() != 32 {
+        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    }
+    *cached_key = Some(key.clone());
+    Ok(key)
+}
+
+fn document_key_vault_secret(allow_interaction: bool) -> AppResult<keyring::Result<Vec<u8>>> {
     #[cfg(target_os = "macos")]
     let _interaction_lock = if allow_interaction {
         None
@@ -925,12 +1034,35 @@ fn document_key_vault_key(allow_interaction: bool) -> AppResult<Vec<u8>> {
     };
     #[cfg(not(target_os = "macos"))]
     let _ = allow_interaction;
-    let key = document_key_vault_entry()?.get_secret().map_err(|error| AppError::Message(error.to_string()))?;
-    if key.len() != 32 {
-        return Err(AppError::Message("The document key vault wrapping key is invalid.".into()));
+    Ok(document_key_vault_entry()?.get_secret())
+}
+
+// Lets the Electron shell share the Tauri keyring entry that wraps the document key vault.
+pub fn document_key_vault_key_cli(mode: &str) -> Result<String, String> {
+    let result = match mode {
+        "get" => document_key_vault_secret(true),
+        "try-get" => document_key_vault_secret(false),
+        "create" => document_key_vault_entry().map(|entry| {
+            let key = Aes256Gcm::generate_key(&mut OsRng).to_vec();
+            entry.set_secret(&key).map(|_| key)
+        }),
+        other => return Err(format!("Unknown document key vault key mode: {other}")),
     }
-    *cached_key = Some(key.clone());
-    Ok(key)
+    .map_err(|error| error.to_string())?;
+    let output = match result {
+        Ok(key) => serde_json::json!({ "state": "found", "key": BASE64.encode(key) }),
+        Err(keyring::Error::NoEntry) => serde_json::json!({ "state": "missing" }),
+        Err(keyring::Error::NoStorageAccess(_)) => serde_json::json!({ "state": "denied" }),
+        Err(keyring::Error::PlatformFailure(_)) => serde_json::json!({ "state": "unavailable" }),
+        Err(error) => serde_json::json!({ "state": "error", "message": error.to_string() }),
+    };
+    Ok(output.to_string())
+}
+
+pub fn document_key_vault_key_cli_mode_arg(args: &[String]) -> Option<&str> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--document-key-vault-key")
+        .map(|pair| pair[1].as_str())
 }
 
 fn document_key_vault_path(app: &AppHandle) -> AppResult<PathBuf> {
@@ -1391,8 +1523,6 @@ fn open_document_key_file_dialog() -> AppResult<Vec<DocumentKeyFileSource>> {
     }).collect()
 }
 const INTEGRATION_INSPECTOR: &str = include_str!("../../src/integration-inspector.js");
-const WEBMCP_POLYFILL: &str = include_str!("../../node_modules/@mcp-b/webmcp-polyfill/dist/index.iife.js");
-const INTEGRATION_WEBMCP_BRIDGE: &str = include_str!("../../src/integration-webmcp-bridge.js");
 
 fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
     let value = match destination {
@@ -1406,6 +1536,16 @@ fn integration_destination_url(destination: &str) -> AppResult<tauri::Url> {
 
 fn allowed_integration_url(url: &tauri::Url) -> bool {
     allowed_integration_url_for_origins(url, &[])
+}
+
+/// Whether going from one address to the other only changes the part after #: the page stays, and no page load follows
+/// (a single-page site such as Gmail, whose `#label/…/<message>` is the page shown).
+fn same_document_url(current: &tauri::Url, next: &tauri::Url) -> bool {
+    let mut current_document = current.clone();
+    current_document.set_fragment(None);
+    let mut next_document = next.clone();
+    next_document.set_fragment(None);
+    current_document == next_document && current.fragment() != next.fragment()
 }
 
 fn is_local_integration_http(url: &tauri::Url) -> bool {
@@ -1427,26 +1567,65 @@ fn allowed_integration_url_for_origins(url: &tauri::Url, origins: &[String]) -> 
         })
 }
 
-fn integration_extraction_script(extraction: &serde_json::Value) -> String {
+const INTEGRATION_WEBMCP: &str = include_str!("../../src/integration-webmcp-bridge.js");
+
+/// A WebMCP request (integration-webmcp-bridge.js), run once in the page's own world, where the page's tools are. On
+/// macOS its result is the script's, so nothing of it stays in the page; elsewhere it goes to Galaxy as the inspector's
+/// results do, from the page's world, where the inspector is there.
+fn run_integration_webmcp(app: &AppHandle, webview: &tauri::Webview, action_mode: Arc<AtomicBool>, profile_id: &str, operation: &str, request: &serde_json::Value) -> tauri::Result<()> {
+    let call = format!("({INTEGRATION_WEBMCP})({operation:?}, {request})");
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        let profile_id = profile_id.to_string();
+        let request = request.clone();
+        integration_world::call_in_page(webview, format!("return await {call}.then(JSON.stringify);"), move |text| {
+            // The script answers its own failures: one that does not finish is a page that went away while it ran.
+            let result = text.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_else(|| serde_json::json!({
+                "kind": "integration-webmcp-error",
+                "requestId": request.get("requestId"),
+                "focusMainOnResult": request.get("focusMainOnResult").and_then(serde_json::Value::as_bool) == Some(true),
+                "code": "NavigationError",
+                "message": "The page navigated during WebMCP execution.",
+            }));
+            emit_integration_result(&app, &action_mode, &profile_id, result);
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, action_mode);
+        webview.eval(format!("{}\n{call}.then((result) => window.__hvyGalaxyInspector.publish(result));", integration_inspector_source(profile_id)))
+    }
+}
+
+/// What a browser waiting on its page does once the page is there: a WebMCP request, in the page's world, or the
+/// inspector's work, in its own.
+fn run_integration_extraction(app: &AppHandle, webview: &tauri::Webview, action_mode: Arc<AtomicBool>, profile_id: &str, extraction: &serde_json::Value) -> tauri::Result<()> {
+    let payload = extraction.get("payload").cloned().unwrap_or_else(|| serde_json::json!({}));
+    match extraction.get("kind").and_then(serde_json::Value::as_str) {
+        Some("webmcp-discovery") => run_integration_webmcp(app, webview, action_mode, profile_id, "discover", &payload),
+        Some("webmcp-invocation") => run_integration_webmcp(app, webview, action_mode, profile_id, "invoke", &payload),
+        _ => integration_world::eval(webview, integration_extraction_script(profile_id, extraction)),
+    }
+}
+
+fn integration_extraction_script(profile_id: &str, extraction: &serde_json::Value) -> String {
+    let inspector = integration_inspector_source(profile_id);
     if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-target") {
         let inspection_kind = if extraction.get("inspectionKind").and_then(serde_json::Value::as_str) == Some("parent") { "parent" } else { "target" };
-        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", INTEGRATION_INSPECTOR, inspection_kind, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.start('{}', Object.assign({{}}, ({}).options || {{}}, {{ externalToolbar: true }}));", inspector, inspection_kind, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("command-execution") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.executeCommandAndReport(({}).payload || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("ready-check-validation") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.validateReadyChecksAndPublish(({}).payload?.readyChecks || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("pattern-highlight") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.matchAndHighlight(({}).pattern || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-discovery") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", INTEGRATION_INSPECTOR, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish(({}).context || {{}});", inspector, extraction)
     } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("source-fetch") {
-        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
-    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-discovery") {
-        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
-    } else if extraction.get("kind").and_then(serde_json::Value::as_str) == Some("webmcp-invocation") {
-        format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke(({}).payload || {{}}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.');", extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     } else {
-        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", INTEGRATION_INSPECTOR, extraction, extraction)
+        format!("{}\nwindow.__hvyGalaxyInspector?.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}});", inspector, extraction, extraction)
     }
 }
 
@@ -1471,6 +1650,9 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
     if command == "open" {
         let foreground = foreground.unwrap_or(true);
         action_mode_pending.store(action_mode.unwrap_or(false), Ordering::SeqCst);
+        if action_mode.unwrap_or(false) {
+            remember_integration_inspection_start(&profile_id, DEFAULT_INTEGRATION_INSPECTION_START.into());
+        }
         *pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))? = payload.clone();
         #[cfg(not(target_os = "macos"))]
         if !load_integration_vault_status(app.clone())?.configured {
@@ -1494,15 +1676,29 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         if let (Some(window), Some(content)) = (app.get_window(&window_label), app.get_webview(&content_label)) {
             window.set_title(&format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
                 .map_err(|error| AppError::Message(error.to_string()))?;
-            if profile_current_url.lock().map(|current| current.as_ref() == Some(&url)).unwrap_or(false) {
+            let current_url = profile_current_url.lock().map(|current| current.clone()).unwrap_or(None);
+            // On the page already, or going to another part of it (only the part after # changes): no page load comes to
+            // start picking or the extraction waiting for one, so it starts now.
+            // A request that asks for the page loaded fresh (`reload`, a site setup's Test) waits for its load either way.
+            let reload = payload.as_ref().and_then(|payload| payload.get("reload")).and_then(serde_json::Value::as_bool).unwrap_or(false);
+            let on_page = !reload && current_url.as_ref() == Some(&url);
+            let same_document = !reload && current_url.as_ref().is_some_and(|current| same_document_url(current, &url));
+            if reload && current_url.as_ref() == Some(&url) {
+                content.reload().map_err(|error| AppError::Message(error.to_string()))?;
+            } else if !on_page {
+                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
+            }
+            // No load reports where it is now, so it is noted here.
+            if same_document {
+                *profile_current_url.lock().map_err(|error| AppError::Message(error.to_string()))? = Some(url.clone());
+            }
+            if on_page || same_document {
                 if action_mode_pending.load(Ordering::SeqCst) {
-                    content.eval(format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR))
+                    integration_world::eval(&content, format!("{}\n{}", integration_inspector_source(&profile_id), integration_inspection_start(&profile_id)))
                         .map_err(|error| AppError::Message(error.to_string()))?;
                 } else if let Some(extraction) = pending_extraction.lock().map_err(|error| AppError::Message(error.to_string()))?.take() {
-                    content.eval(integration_extraction_script(&extraction)).map_err(|error| AppError::Message(error.to_string()))?;
+                    run_integration_extraction(&app, &content, action_mode_pending.clone(), &profile_id, &extraction).map_err(|error| AppError::Message(error.to_string()))?;
                 }
-            } else {
-                content.navigate(url.clone()).map_err(|error| AppError::Message(error.to_string()))?;
             }
             if foreground {
                 raise_integration_window(&window)?;
@@ -1520,7 +1716,6 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         }
         *profile_current_url.lock().map_err(|error| AppError::Message(error.to_string()))? = None;
         let integration_app = app.clone();
-        let integration_window_label = window_label.clone();
         let result_profile_id = profile_id.clone();
         let page_load_profile_id = result_profile_id.clone();
         let page_load_action_mode = action_mode_pending.clone();
@@ -1528,24 +1723,24 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let page_load_current_url = profile_current_url.clone();
         let navigation_action_mode = action_mode_pending.clone();
         let page_load_allowed_origins = profile_allowed_origins.clone();
+        let page_load_page_context = profile_page_context.clone();
+        let page_load_last_allowed_url = integration_last_allowed_url(&profile_id)?;
         let toolbar_allowed_origins = profile_allowed_origins.clone();
         let new_window_allowed_origins = profile_allowed_origins.clone();
-        let navigation_allowed_origins = profile_allowed_origins.clone();
         let new_window_page_context = profile_page_context.clone();
-        let navigation_page_context = profile_page_context.clone();
         let new_window_current_url = profile_current_url.clone();
-        let navigation_current_url = profile_current_url.clone();
         let toolbar_page_context = profile_page_context.clone();
         let new_window_app = app.clone();
         let new_window_profile_id = profile_id.clone();
         let title_profile_name = window_name.clone().unwrap_or_else(|| profile_id.clone());
         #[cfg(target_os = "windows")]
         let integration_inspector = format!(
-            "window.__hvyGalaxyPublish = value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }}));\nwindow.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}",
-            WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR,
+            "window.__hvyGalaxyHost = {{ publish: value => window.chrome.webview.postMessage(JSON.stringify({{ hvyGalaxyIntegrationResult: value }})) }};\n{}",
+            integration_inspector_source(&profile_id),
         );
+        // The inspector, in the page's own world where it has no world of its own (integration_world.rs): on macOS it has one.
         #[cfg(not(target_os = "windows"))]
-        let integration_inspector = format!("window.__hvyGalaxyNativeWebMcp = typeof document.modelContext?.getTools === 'function';\n{}\n{}\n{}", WEBMCP_POLYFILL, INTEGRATION_WEBMCP_BRIDGE, INTEGRATION_INSPECTOR);
+        let integration_inspector = if integration_world::ISOLATED { String::new() } else { integration_inspector_source(&profile_id) };
         let native_window = tauri::window::WindowBuilder::new(&app, &window_label)
             .title(format!("HVY Galaxy Integrations — {}", window_name.as_deref().unwrap_or(&profile_id)))
             .visible(false)
@@ -1566,6 +1761,39 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             }
         })
         .on_page_load(move |window, payload| {
+            // Where the main page goes: inside its allowed origins, or the user is asked (or, outside an integration
+            // page, the address opens in the default browser), and it goes back to where it was. Frames load freely,
+            // as in any browser; the navigation handler hears them too, and cannot tell them from the page.
+            if payload.event() == tauri::webview::PageLoadEvent::Started && payload.url().as_str() != "about:blank" {
+                let url = payload.url().clone();
+                let allowed = page_load_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                if allowed {
+                    if let Ok(mut last) = page_load_last_allowed_url.lock() { *last = Some(url.clone()); }
+                } else {
+                    let back = page_load_last_allowed_url.lock().ok().and_then(|last| last.clone());
+                    if url.scheme() == "https" || is_local_integration_http(&url) {
+                        let context = page_load_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                        if context.page_id.is_some() {
+                            let _ = window.app_handle().emit("integration-browser-event", serde_json::json!({
+                                "kind": "integration-navigation-request",
+                                "profileId": page_load_profile_id,
+                                "integrationId": context.integration_id,
+                                "pageId": context.page_id,
+                                "currentUrl": back.as_ref().map(ToString::to_string).unwrap_or_default(),
+                                "requestedUrl": url.as_str(),
+                                "navigationKind": "main-frame",
+                            }));
+                            if let Some(main_window) = window.app_handle().get_webview_window("main") {
+                                let _ = raise_integration_window(&main_window.as_ref().window());
+                            }
+                        } else {
+                            let _ = open_external_url(url.to_string());
+                        }
+                    }
+                    let _ = window.navigate(back.unwrap_or_else(|| "about:blank".parse().expect("about:blank is a URL")));
+                    return;
+                }
+            }
             if let Ok(mut current_url) = page_load_current_url.lock() {
                 *current_url = Some(payload.url().clone());
             }
@@ -1575,10 +1803,10 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let state = serde_json::json!({ "url": payload.url().as_str(), "allowed": allowed });
                     let _ = toolbar.eval(format!("window.hvySetBrowserState({state})"));
                 }
-                let _ = window.eval("window.__hvyGalaxyInspector?.discoverStructuredSourcesAndPublish({ automatic: true })");
+                let _ = integration_world::eval(&window, format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({{ automatic: true }})", integration_inspector_source(&page_load_profile_id)));
                 if page_load_action_mode.load(Ordering::SeqCst) {
-                    let script = format!("{}\nwindow.__hvyGalaxyInspector?.start('parent', {{ primary: true, externalToolbar: true }});", INTEGRATION_INSPECTOR);
-                    let _ = window.eval(&script);
+                    let script = format!("{}\n{}", integration_inspector_source(&page_load_profile_id), integration_inspection_start(&page_load_profile_id));
+                    let _ = integration_world::eval(&window, &script);
                 } else if let Ok(mut pending) = page_load_extraction.lock() {
                     let current_origin = payload.url().origin().ascii_serialization();
                     let expected_origins = pending.as_ref()
@@ -1592,8 +1820,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                         .unwrap_or_else(|| expected_origin.is_none_or(|origin| current_origin == origin));
                     if at_expected_origin {
                       if let Some(extraction) = pending.take() {
-                        let script = integration_extraction_script(&extraction);
-                        let _ = window.eval(&script);
+                        let _ = run_integration_extraction(window.app_handle(), &window, page_load_action_mode.clone(), &page_load_profile_id, &extraction);
                       }
                     }
                 }
@@ -1611,7 +1838,7 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
                     let current_url = new_window_current_url.lock().ok()
                         .and_then(|url| url.as_ref().map(ToString::to_string))
                         .unwrap_or_default();
-                    let _ = new_window_app.emit("integration-inspection-result", serde_json::json!({
+                    let _ = new_window_app.emit("integration-browser-event", serde_json::json!({
                         "kind": "integration-navigation-request",
                         "profileId": new_window_profile_id,
                         "integrationId": context.integration_id,
@@ -1633,111 +1860,42 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             if requested_url.as_str() == "about:blank" {
                 return true;
             }
-            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
-                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                    if browser_command == "back" { let _ = window.eval("window.history.back()"); }
-                    if browser_command == "forward" { let _ = window.eval("window.history.forward()"); }
-                    if browser_command == "reload" { let _ = window.reload(); }
-                    if browser_command == "inspect" {
-                        navigation_action_mode.store(true, Ordering::SeqCst);
-                        let _ = window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR));
-                    }
-                    if browser_command == "close" {
-                        #[cfg(not(target_os = "macos"))]
-                        let _ = save_integration_cookies(&integration_app, &window);
-                        if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
-                    }
-                }
-                return false;
-            }
-            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(value) = String::from_utf8(bytes) {
-                        if let Ok(url) = value.parse::<tauri::Url>() {
-                            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
-                            if allowed {
-                                if let Some(window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                                    let _ = window.navigate(url);
-                                }
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-            if requested_url.as_str() == "hvy-integration://close" {
-                if let Some(_window) = integration_app.get_webview(&integration_content_label(&result_profile_id)) {
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = save_integration_cookies(&integration_app, &_window);
-                    if let Some(host) = integration_app.get_window(&integration_window_label) { let _ = host.close(); }
-                }
-                return false;
-            }
+            // Every navigation in every frame comes here. A message to Galaxy counts only with the browser's token
+            // (integration-inspector.js), which a frame the page embeds cannot read; it is read without it. The page's
+            // own scripts can read it, so this way comes only what the page says: what the host reports is its own
+            // event (integration-browser-event).
+            let message;
+            let requested_url = if requested_url.scheme() == "hvy-integration" {
+                let Some(checked) = integration_message(requested_url, &result_profile_id) else { return false };
+                message = checked;
+                &message
+            } else {
+                requested_url
+            };
             if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://inspection/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(mut result) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        if let Some(object) = result.as_object_mut() {
-                            object.insert("profileId".into(), serde_json::Value::String(result_profile_id.clone()));
-                        }
-                        let is_background_result = integration_result_is_background(&result);
-                        navigation_action_mode.store(false, Ordering::SeqCst);
-                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                            let _ = toolbar.eval("window.hvySetInspectionState?.({})");
-                        }
-                        let _ = integration_app.emit("integration-inspection-result", result);
-                        if !is_background_result {
-                            if let Some(main_window) = integration_app.get_webview_window("main") {
-                                let _ = raise_integration_window(&main_window.as_ref().window());
-                            }
-                        }
-                    }
+                if let Ok(result) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| ())) {
+                    emit_integration_result(&integration_app, &navigation_action_mode, &result_profile_id, result);
                 }
                 return false;
             }
             if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://toolbar-state/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(state) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                        if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                            let _ = toolbar.eval(format!("window.hvySetInspectionState?.({state})"));
-                        }
-                    }
+                if let Ok(state) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|_| ())) {
+                    show_integration_toolbar_state(&integration_app, &result_profile_id, &state);
+                }
+                return false;
+            }
+            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://location/") {
+                if let Ok(href) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded).map_err(|_| ()).and_then(|bytes| serde_json::from_slice::<String>(&bytes).map_err(|_| ())) {
+                    show_integration_location(&integration_app, &result_profile_id, &href);
                 }
                 return false;
             }
             if requested_url.as_str() == "hvy-integration://inspection-cancel" {
-                navigation_action_mode.store(false, Ordering::SeqCst);
-                if let Some(toolbar) = integration_app.get_webview(&integration_toolbar_label(&result_profile_id)) {
-                    let _ = toolbar.eval("window.hvySetInspectionState?.({})");
-                }
-                if let Some(main_window) = integration_app.get_webview_window("main") {
-                    let _ = raise_integration_window(&main_window.as_ref().window());
-                }
+                cancel_integration_inspection(&integration_app, &navigation_action_mode, &result_profile_id);
                 return false;
             }
-            let allowed = navigation_allowed_origins.lock().map(|origins| allowed_integration_url_for_origins(requested_url, &origins)).unwrap_or(false);
-            if !allowed && (requested_url.scheme() == "https" || is_local_integration_http(requested_url)) {
-                let context = navigation_page_context.lock().map(|value| value.clone()).unwrap_or_default();
-                if context.page_id.is_some() {
-                    let current_url = navigation_current_url.lock().ok()
-                        .and_then(|url| url.as_ref().map(ToString::to_string))
-                        .unwrap_or_default();
-                    let _ = integration_app.emit("integration-inspection-result", serde_json::json!({
-                        "kind": "integration-navigation-request",
-                        "profileId": result_profile_id,
-                        "integrationId": context.integration_id,
-                        "pageId": context.page_id,
-                        "currentUrl": current_url,
-                        "requestedUrl": requested_url.as_str(),
-                        "navigationKind": "frame-or-main",
-                    }));
-                    if let Some(main_window) = integration_app.get_webview_window("main") {
-                        let _ = raise_integration_window(&main_window.as_ref().window());
-                    }
-                } else {
-                    let _ = open_external_url(requested_url.to_string());
-                }
-            }
-            allowed
+            // Any other Galaxy address is not one it takes; anything else loads (the page load guards the main page).
+            requested_url.scheme() != "hvy-integration"
         });
         #[cfg(target_os = "macos")]
         let builder = builder.data_store_identifier(integration_data_store_id(browser_store_id.as_deref().unwrap_or(DEFAULT_INTEGRATION_PROFILE_ID))?);
@@ -1759,102 +1917,70 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
             action_mode_pending.clone(),
             profile_id.clone(),
         )?;
-        let toolbar_label = integration_toolbar_label(&profile_id);
-        let toolbar_remote = remote_webview.clone();
-        let toolbar_window = native_window.clone();
+        let world_app = app.clone();
+        let world_action_mode = action_mode_pending.clone();
+        let world_profile_id = profile_id.clone();
+        integration_world::listen(&remote_webview, Arc::new(move |text: String| receive_integration_page_message(&world_app, &world_action_mode, &world_profile_id, &text)))
+            .map_err(|error| AppError::Message(error.to_string()))?;
+        // The toolbar (browser_chrome.rs), with what only an integration's has: its page menu, picking's buttons, and an
+        // address typed, inside its allowed sites or asked about.
+        let chrome = BrowserChrome { toolbar_label: integration_toolbar_label(&profile_id), current_url: profile_current_url.clone(), allowed_origins: toolbar_allowed_origins.clone() };
         let toolbar_app = app.clone();
+        let toolbar_remote = remote_webview.clone();
         let toolbar_profile_id = profile_id.clone();
         let toolbar_origins = toolbar_allowed_origins;
         let toolbar_current_url = profile_current_url;
-        let toolbar_action_mode = action_mode_pending.clone();
-        let toolbar = tauri::webview::WebviewBuilder::new(
-            toolbar_label,
-            tauri::WebviewUrl::App("integration-browser-toolbar.html".into()),
-        ).on_navigation(move |requested_url| {
-            if let Some(action) = requested_url.as_str().strip_prefix("hvy-integration://toolbar/") {
-                let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
-                    "kind": "integration-toolbar-action",
-                    "action": action,
-                    "profileId": toolbar_profile_id,
-                }));
-                if let Some(main_window) = toolbar_app.get_webview_window("main") {
-                    let _ = raise_integration_window(&main_window.as_ref().window());
+        attach_browser_chrome(&app, &native_window, &remote_webview, &chrome, BrowserChromeOptions {
+            integration: true,
+            profile_name: window_name.clone().unwrap_or_else(|| profile_id.clone()),
+            on_message: Some(Arc::new(move |message: IntegrationToolbarMessage| match message {
+                IntegrationToolbarMessage::ToolbarAction { action } => {
+                    let _ = toolbar_app.emit("integration-browser-event", serde_json::json!({
+                        "kind": "integration-toolbar-action",
+                        "action": action,
+                        "profileId": toolbar_profile_id,
+                    }));
+                    if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                        let _ = raise_integration_window(&main_window.as_ref().window());
+                    }
                 }
-                return false;
-            }
-            if let Some(browser_command) = requested_url.as_str().strip_prefix("hvy-integration://browser/") {
-                if browser_command == "back" { let _ = toolbar_remote.eval("window.history.back()"); }
-                if browser_command == "forward" { let _ = toolbar_remote.eval("window.history.forward()"); }
-                if browser_command == "reload" { let _ = toolbar_remote.reload(); }
-                if browser_command == "inspect" {
-                    toolbar_action_mode.store(true, Ordering::SeqCst);
-                    let _ = toolbar_remote.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start()", INTEGRATION_INSPECTOR));
+                IntegrationToolbarMessage::InspectorControl { id } => {
+                    // A button the page's picker put on the toolbar, by its id.
+                    if !id.is_empty() && id.chars().all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-') {
+                        let _ = integration_world::eval(&toolbar_remote, &format!("window.__hvyGalaxyInspector?.control({id:?})"));
+                    }
                 }
-                if browser_command == "close" { let _ = toolbar_window.close(); }
-                return false;
-            }
-            if let Some(control) = requested_url.as_str().strip_prefix("hvy-integration://inspector-control/") {
-                if matches!(control, "navigate" | "undo" | "done") {
-                    let _ = toolbar_remote.eval(&format!("window.__hvyGalaxyInspector?.control({control:?})"));
-                }
-                return false;
-            }
-            if let Some(encoded) = requested_url.as_str().strip_prefix("hvy-integration://navigate/") {
-                if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(encoded) {
-                    if let Ok(value) = String::from_utf8(bytes) {
-                        if let Ok(url) = value.parse::<tauri::Url>() {
-                            let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
-                            if allowed {
-                                let _ = toolbar_remote.navigate(url);
-                            } else if url.scheme() == "https" || is_local_integration_http(&url) {
-                                let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
-                                if context.page_id.is_some() {
-                                    let current_url = toolbar_current_url.lock().ok()
-                                        .and_then(|url| url.as_ref().map(ToString::to_string))
-                                        .unwrap_or_default();
-                                    let _ = toolbar_app.emit("integration-inspection-result", serde_json::json!({
-                                        "kind": "integration-navigation-request",
-                                        "profileId": toolbar_profile_id,
-                                        "integrationId": context.integration_id,
-                                        "pageId": context.page_id,
-                                        "currentUrl": current_url,
-                                        "requestedUrl": url.as_str(),
-                                        "navigationKind": "address",
-                                    }));
-                                    if let Some(main_window) = toolbar_app.get_webview_window("main") {
-                                        let _ = raise_integration_window(&main_window.as_ref().window());
-                                    }
-                                } else {
-                                    let _ = open_external_url(url.to_string());
-                                }
+                IntegrationToolbarMessage::Navigate { url } => {
+                    let Ok(url) = url.parse::<tauri::Url>() else { return };
+                    let allowed = toolbar_origins.lock().map(|origins| allowed_integration_url_for_origins(&url, &origins)).unwrap_or(false);
+                    if allowed {
+                        let _ = toolbar_remote.navigate(url);
+                    } else if url.scheme() == "https" || is_local_integration_http(&url) {
+                        let context = toolbar_page_context.lock().map(|value| value.clone()).unwrap_or_default();
+                        if context.page_id.is_some() {
+                            let current_url = toolbar_current_url.lock().ok()
+                                .and_then(|url| url.as_ref().map(ToString::to_string))
+                                .unwrap_or_default();
+                            let _ = toolbar_app.emit("integration-browser-event", serde_json::json!({
+                                "kind": "integration-navigation-request",
+                                "profileId": toolbar_profile_id,
+                                "integrationId": context.integration_id,
+                                "pageId": context.page_id,
+                                "currentUrl": current_url,
+                                "requestedUrl": url.as_str(),
+                                "navigationKind": "address",
+                            }));
+                            if let Some(main_window) = toolbar_app.get_webview_window("main") {
+                                let _ = raise_integration_window(&main_window.as_ref().window());
                             }
+                        } else {
+                            let _ = open_external_url(url.to_string());
                         }
                     }
                 }
-                return false;
-            }
-            true
-        });
-        let toolbar_webview = native_window.add_child(
-            toolbar,
-            tauri::LogicalPosition::new(0.0, 0.0),
-            tauri::LogicalSize::new(logical_size.width, toolbar_view_height),
-        ).map_err(|error| AppError::Message(error.to_string()))?;
-        let resized_remote = remote_webview.clone();
-        let resized_toolbar = toolbar_webview.clone();
-        native_window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Resized(size) = event {
-                let logical_size = size.to_logical::<f64>(scale);
-                let _ = resized_remote.set_bounds(tauri::Rect {
-                    position: tauri::LogicalPosition::new(0.0, toolbar_view_height).into(),
-                    size: tauri::LogicalSize::new(logical_size.width, (logical_size.height - toolbar_view_height).max(0.0)).into(),
-                });
-                let _ = resized_toolbar.set_bounds(tauri::Rect {
-                    position: tauri::LogicalPosition::new(0.0, 0.0).into(),
-                    size: tauri::LogicalSize::new(logical_size.width, toolbar_view_height).into(),
-                });
-            }
-        });
+                _ => {}
+            })),
+        })?;
         if !foreground {
             if let Some(main_window) = app.get_webview_window("main") {
                 raise_integration_window(&main_window.as_ref().window())?;
@@ -1868,11 +1994,12 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         let destroyed_profile_id = profile_id.clone();
         native_window.on_window_event(move |event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                // Every close is reported: whatever was waiting on this window ends, not only a selection.
+                let _ = menu_app.emit("integration-browser-event", serde_json::json!({
+                    "kind": "integration-browser-closed",
+                    "profileId": destroyed_profile_id,
+                }));
                 if destroyed_action_mode.swap(false, Ordering::SeqCst) {
-                    let _ = menu_app.emit("integration-inspection-result", serde_json::json!({
-                        "kind": "integration-browser-closed",
-                        "profileId": destroyed_profile_id,
-                    }));
                     if let Some(main_window) = menu_app.get_webview_window("main") {
                         let _ = raise_integration_window(&main_window.as_ref().window());
                     }
@@ -1936,27 +2063,31 @@ async fn integration_browser_command(app: AppHandle, command: String, destinatio
         }
     }
     match command.as_str() {
-        "back" => window.eval("window.history.back()"),
-        "forward" => window.eval("window.history.forward()"),
+        "back" => integration_world::eval(&window, "window.history.back()"),
+        "forward" => integration_world::eval(&window, "window.history.forward()"),
         "reload" => window.reload(),
-        "inspect" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', {{ externalToolbar: true }})", INTEGRATION_INSPECTOR)),
-        "inspect-parent" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('parent', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "inspect-target" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.start('target', Object.assign({{}}, {}, {{ externalToolbar: true }}))", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "test-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "check-page-ready" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "extract-pattern" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "cancel-extraction" => window.eval("window.__hvyGalaxyInspector?.cancelExtraction()"),
-        "execute-command" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "discover-sources" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", INTEGRATION_INSPECTOR, payload.unwrap_or_default())),
-        "fetch-source" => window.eval(&format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", INTEGRATION_INSPECTOR, payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
-        "discover-webmcp-tools" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.discover({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
-        "invoke-webmcp-tool" => window.eval(&format!("if (window.__hvyGalaxyWebMcp) window.__hvyGalaxyWebMcp.invoke({}); else throw new Error('Galaxy WebMCP bridge is unavailable. Restart Galaxy and reopen this integration page.')", payload.unwrap_or_default())),
-        "cancel-webmcp-tool" => window.eval(&format!("window.__hvyGalaxyWebMcp?.cancel(({}).requestId)", payload.unwrap_or_default())),
+        "inspect" | "inspect-parent" | "inspect-target" => {
+            let start = match command.as_str() {
+                "inspect" => "window.__hvyGalaxyInspector.start('target', { externalToolbar: true });".to_string(),
+                kind => format!("window.__hvyGalaxyInspector.start('{}', Object.assign({{}}, {}, {{ externalToolbar: true }}));", if kind == "inspect-parent" { "parent" } else { "target" }, payload.unwrap_or_default()),
+            };
+            remember_integration_inspection_start(&profile_id, start.clone());
+            integration_world::eval(&window, &format!("{}\n{}", integration_inspector_source(&profile_id), start))
+        }
+        "test-pattern" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.matchAndHighlight({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "check-page-ready" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.checkPageReadyAndPublish(({}).readyChecks || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "extract-pattern" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.extractAndPublish(({}).pattern || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "cancel-extraction" => integration_world::eval(&window, "window.__hvyGalaxyInspector?.cancelExtraction()"),
+        "execute-command" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.executeCommandAndReport({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "discover-sources" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.discoverStructuredSourcesAndPublish({})", integration_inspector_source(&profile_id), payload.unwrap_or_default())),
+        "fetch-source" => integration_world::eval(&window, &format!("{}\nwindow.__hvyGalaxyInspector.fetchStructuredSourceAndPublish(({}).source || {{}}, ({}).context || {{}})", integration_inspector_source(&profile_id), payload.clone().unwrap_or_default(), payload.unwrap_or_default())),
+        "discover-webmcp-tools" => run_integration_webmcp(&app, &window, action_mode_pending.clone(), &profile_id, "discover", &payload.unwrap_or_else(|| serde_json::json!({}))),
+        "invoke-webmcp-tool" => run_integration_webmcp(&app, &window, action_mode_pending.clone(), &profile_id, "invoke", &payload.unwrap_or_else(|| serde_json::json!({}))),
         "cancel-inspect" => {
             if let Some(toolbar) = app.get_webview(&integration_toolbar_label(&profile_id)) {
                 let _ = toolbar.eval("window.hvySetInspectionState?.({})");
             }
-            window.eval("window.__hvyGalaxyInspector?.stop()")
+            integration_world::eval(&window, "window.__hvyGalaxyInspector?.stop()")
         },
         "focus-browser" | "focus-main" => Ok(()),
         "close" => {
@@ -2320,7 +2451,7 @@ fn add_files_to_workspace(app: AppHandle, workspace_path: String, target_directo
             .file_name()
             .ok_or_else(|| AppError::Message("Selected file has no file name.".into()))?;
         let is_template = installs_workspace_templates && template_extension(&source).is_some();
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, file_name, LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
@@ -2392,7 +2523,7 @@ fn add_dropped_files_to_workspace(
             ));
         }
         let is_template = installs_workspace_templates && template_extension(Path::new(&file.name)).is_some();
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, std::ffi::OsStr::new(&file.name))?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, std::ffi::OsStr::new(&file.name), LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::write(&destination, file.bytes)?;
@@ -2496,6 +2627,25 @@ fn read_document_file_metadata(app: AppHandle, path: String) -> AppResult<Docume
     let metadata = read_document_metadata_at(&path)?;
     add_recent_file(&app, &path)?;
     Ok(metadata)
+}
+
+/// Diagnostics: one line of the page's trace (src/traceLog.ts), appended to trace.log in the app's log folder as it
+/// comes, so what the page did last is on disk even when it hangs. The file starts over past 50 MB. Development builds
+/// only: a release build writes nothing, as the trace holds pieces of documents' text.
+#[tauri::command]
+fn append_trace_line(app: AppHandle, line: String) -> AppResult<()> {
+    if !cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let directory = app.path().app_log_dir().map_err(|error| AppError::Message(error.to_string()))?;
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("trace.log");
+    if fs::metadata(&path).map(|metadata| metadata.len() > 50 * 1024 * 1024).unwrap_or(false) {
+        fs::remove_file(&path)?;
+    }
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(file, "{line}")?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2848,17 +2998,19 @@ fn create_document_file(
     if relative.is_absolute() || relative.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
         return Err(AppError::Message("Document path must stay inside the workspace.".into()));
     }
-    let path = workspace_path.join(relative);
-    if path.exists() {
-        return Err(AppError::Message("A document already exists at that path.".into()));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let requested = workspace_path.join(relative);
+    let (Some(parent), Some(file_name)) = (requested.parent(), requested.file_name()) else {
+        return Err(AppError::Message("Document path must name a file.".into()));
+    };
+    fs::create_dir_all(parent)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), parent, file_name, LiveNameConflict::Error)?;
+    let path = incoming.destination;
     write_file_atomically(&path, bytes.as_deref().unwrap_or_else(|| template.as_bytes()))?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_file(&app, &path)?;
-    Ok(read_document_at(&path)?)
+    let mut file = read_document_at(&path)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -2961,19 +3113,21 @@ fn rename_document_file(app: AppHandle, path: String, name: String) -> AppResult
         .parent()
         .ok_or_else(|| AppError::Message("Document file has no containing folder.".into()))?;
     let name = normalized_rename_stem(&name)?;
-    let destination = parent.join(format!("{name}{extension}"));
-    if destination == path {
+    let file_name = format!("{name}{extension}");
+    if parent.join(&file_name) == path {
         return Ok(read_document_at(&path)?);
     }
-    if destination.exists() {
-        return Err(AppError::Message("A document with that name already exists.".into()));
-    }
+    let workspace_path = workspace_root_for_document(parent);
+    let incoming = claim_workspace_destination(workspace_path.as_deref(), parent, std::ffi::OsStr::new(&file_name), LiveNameConflict::Error)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
-    if let Some(workspace_path) = workspace_root_for_document(parent) {
-        rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
+    if let Some(workspace_path) = &workspace_path {
+        rename_workspace_file_manifest_entries(workspace_path, &path, &destination)?;
     }
     add_recent_file(&app, &destination)?;
-    Ok(read_document_at(&destination)?)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3108,6 +3262,19 @@ fn delete_workspace_folder(app: AppHandle, request: DeleteWorkspaceFolderRequest
     load_workspace_from_path(&workspace_path)
 }
 
+#[tauri::command]
+fn rename_workspace_folder(app: AppHandle, request: RenameWorkspaceFolderRequest) -> AppResult<RenamedWorkspaceFolder> {
+    let workspace_path = PathBuf::from(request.workspace_path);
+    ensure_workspace(&workspace_path)?;
+    let relocated_files = rename_workspace_folder_at(&workspace_path, &request.target_directory, &request.name)?;
+    relocate_recent_files(&app, &relocated_files)?;
+    add_recent_workspace(&app, &workspace_path)?;
+    Ok(RenamedWorkspaceFolder {
+        workspace: load_workspace_from_path(&workspace_path)?,
+        relocated_files,
+    })
+}
+
 fn workspace_document_files_in_directory(directory: &Path) -> AppResult<Vec<PathBuf>> {
     if !directory.exists() {
         return Ok(Vec::new());
@@ -3160,12 +3327,16 @@ fn save_document_to_workspace_bytes(
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
     let file_name = document_file_name(&name)?;
-    let destination = unique_copy_path(&workspace_target_directory(&workspace_path, &target_directory)?, std::ffi::OsStr::new(&file_name));
+    let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, std::ffi::OsStr::new(&file_name), LiveNameConflict::Suffix)?;
+    let destination = incoming.destination;
     write_file_atomically(&destination, bytes)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(app, &workspace_path)?;
     add_recent_file(app, &destination)?;
-    read_document_metadata_at(&destination)
+    let mut file = read_document_metadata_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3182,7 +3353,7 @@ fn copy_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
     let target_root = workspace_target_directory(&workspace_path, &target_directory)?;
-    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, file_name, LiveNameConflict::Suffix)?;
     let destination = incoming.destination;
     fs::copy(&path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
@@ -3217,7 +3388,7 @@ fn move_document_to_workspace(app: AppHandle, path: String, workspace_path: Stri
     let file_name = path
         .file_name()
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
-    let incoming = incoming_workspace_file(&workspace_path, &target_root, file_name)?;
+    let incoming = claim_workspace_destination(Some(&workspace_path), &target_root, file_name, LiveNameConflict::Suffix)?;
     let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     if let Some(source_workspace) = source_workspace {
@@ -3278,13 +3449,16 @@ fn convert_workspace_document_kind(
         .and_then(|name| name.to_str())
         .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
     let file_name = format!("{stem}{next_extension}");
-    let destination = unique_copy_path(&destination_root, std::ffi::OsStr::new(&file_name));
+    let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, std::ffi::OsStr::new(&file_name), LiveNameConflict::Suffix)?;
+    let destination = incoming.destination;
     fs::rename(&path, &destination)?;
     rename_workspace_file_manifest_entries(&workspace_path, &path, &destination)?;
     touch_workspace_manifest(&workspace_path)?;
     add_recent_workspace(&app, &workspace_path)?;
     add_recent_file(&app, &destination)?;
-    read_document_at(&destination)
+    let mut file = read_document_at(&destination)?;
+    file.relocated_archived_files.extend(incoming.relocated_archived_file);
+    Ok(file)
 }
 
 #[tauri::command]
@@ -3298,39 +3472,19 @@ fn write_system_file_clipboard(request: SystemFileClipboardRequest) -> AppResult
     if files.is_empty() {
         return Err(AppError::Message("No supported document files to copy.".into()));
     }
-    if !cfg!(target_os = "macos") {
-        return Err(AppError::Message("System file clipboard is currently supported on macOS only.".into()));
-    }
-    run_apple_script(&mac_file_clipboard_write_script(&files))?;
-    Ok(())
+    write_clipboard_file_paths(&files)
 }
 
 #[tauri::command]
 fn read_system_clipboard_text() -> AppResult<String> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        return Err(AppError::Message("System clipboard text read is currently supported on macOS only.".into()));
-    }
-    #[cfg(target_os = "macos")]
-    {
-        run_apple_script("the clipboard as text")
-    }
+    system_clipboard()?.get_text().map_err(clipboard_error)
 }
 
 #[tauri::command]
 fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, target_directory: String) -> AppResult<AddFilesResult> {
     let workspace_path = PathBuf::from(workspace_path);
     ensure_workspace(&workspace_path)?;
-    if !cfg!(target_os = "macos") {
-        return Err(AppError::Message("System file paste is currently supported on macOS only.".into()));
-    }
-    let output = run_apple_script(mac_file_clipboard_read_script())?;
-    let source_paths: Vec<PathBuf> = output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(PathBuf::from)
-        .collect();
+    let source_paths = read_clipboard_file_paths()?;
     if source_paths.is_empty() {
         return Err(AppError::Message("No files are available to paste.".into()));
     }
@@ -3344,7 +3498,7 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
             .file_name()
             .ok_or_else(|| AppError::Message("Document file has no file name.".into()))?;
         let destination_root = workspace_target_directory(&workspace_path, &target_directory)?;
-        let incoming = incoming_workspace_file(&workspace_path, &destination_root, file_name)?;
+        let incoming = claim_workspace_destination(Some(&workspace_path), &destination_root, file_name, LiveNameConflict::Suffix)?;
         let destination = incoming.destination;
         relocated_archived_files.extend(incoming.relocated_archived_file);
         fs::copy(&source, &destination)?;
@@ -3364,44 +3518,42 @@ fn paste_system_files_to_workspace(app: AppHandle, workspace_path: String, targe
     })
 }
 
-fn mac_file_clipboard_write_script(files: &[PathBuf]) -> String {
-    let file_items = files
-        .iter()
-        .map(|file| format!("POSIX file {}", apple_script_string(&file.to_string_lossy())))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("set the clipboard to {{{file_items}}}")
+fn system_clipboard() -> AppResult<arboard::Clipboard> {
+    arboard::Clipboard::new().map_err(clipboard_error)
 }
 
-fn mac_file_clipboard_read_script() -> &'static str {
-    r#"
-use framework "AppKit"
-use scripting additions
-set pasteboard to current application's NSPasteboard's generalPasteboard()
-set urls to pasteboard's readObjectsForClasses:{current application's NSURL} options:(missing value)
-set filePaths to {}
-if urls is not missing value then
-  repeat with fileUrl in urls
-    if (fileUrl's isFileURL()) as boolean then set end of filePaths to (fileUrl's |path|()) as text
-  end repeat
-end if
-set AppleScript's text item delimiters to linefeed
-return filePaths as text
-"#
-}
-
-fn apple_script_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn run_apple_script(script: &str) -> AppResult<String> {
-    let output = Command::new("/usr/bin/osascript").arg("-e").arg(script).output()?;
-    if !output.status.success() {
-        return Err(AppError::Message(
-            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        ));
+fn clipboard_error(error: arboard::Error) -> AppError {
+    match error {
+        arboard::Error::ContentNotAvailable => AppError::Message("The clipboard does not contain that kind of content.".into()),
+        error => AppError::Message(error.to_string()),
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn read_clipboard_file_paths() -> AppResult<Vec<PathBuf>> {
+    match system_clipboard()?.get().file_list() {
+        Ok(paths) => Ok(paths),
+        Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+        Err(error) => Err(clipboard_error(error)),
+    }
+}
+
+fn write_clipboard_file_paths(files: &[PathBuf]) -> AppResult<()> {
+    system_clipboard()?.set().file_list(files).map_err(clipboard_error)
+}
+
+/// Helper-binary entry point used by the Electron shell, which has no native file clipboard API.
+pub fn clipboard_files_cli(args: &[String]) -> Option<Result<String, String>> {
+    if args.iter().any(|arg| arg == "--read-clipboard-files") {
+        return Some(
+            read_clipboard_file_paths()
+                .map(|paths| paths.iter().map(|path| path.to_string_lossy().to_string()).collect::<Vec<_>>().join("
+"))
+                .map_err(|error| error.to_string()),
+        );
+    }
+    let index = args.iter().position(|arg| arg == "--write-clipboard-files")?;
+    let files: Vec<PathBuf> = args[index + 1..].iter().map(PathBuf::from).collect();
+    Some(write_clipboard_file_paths(&files).map(|()| String::new()).map_err(|error| error.to_string()))
 }
 
 #[tauri::command]
@@ -3581,14 +3733,10 @@ fn update_file_menu_state(app: AppHandle, native_menu: State<NativeMenuState>, s
         *current = state.clone();
         changed
     };
-    if unsaved_changes_visibility_changed {
-        let menu = build_menu(&app).map_err(|error| AppError::Message(error.to_string()))?;
-        set_file_menu_state(&menu, &state)?;
-        app.set_menu(menu)
-            .map_err(|error| AppError::Message(error.to_string()))?;
-        return Ok(());
-    }
     if let Some(menu) = app.menu() {
+        if unsaved_changes_visibility_changed {
+            set_document_encryption_unsaved_changes_shown(&app, &menu, state.document_encryption_unsaved_changes)?;
+        }
         set_file_menu_state(&menu, &state)?;
     }
     Ok(())

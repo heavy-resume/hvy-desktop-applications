@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, createCustomPageIntegration, defaultIntegrationRegistry, integrationNavigationResumeUrl, jsonPathFor, loadIntegrationRegistry, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, selectedInspectionContent } from './integrationRegistry';
+import { actionPatternPayload, applyInspectionPrivacyRules, commandExecutionPayload, createCustomPageIntegration, defaultIntegrationRegistry, jsonPathFor, loadIntegrationRegistry, matcherSnapshot, matchingInspectionPrivacyRules, normalizeIntegrationPageAllowedOrigins, pageCommandExecutionPayload, selectedInspectionContent } from './integrationRegistry';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -43,19 +43,6 @@ describe('integration registry', () => {
       'https://messages.google.com/web/',
       'http://android.com',
     )).toThrow('must use HTTPS');
-  });
-
-  it('reloads the top-level page when Tauri cannot distinguish an iframe navigation', () => {
-    expect(integrationNavigationResumeUrl(
-      'frame-or-main',
-      'https://messages.google.com/web/',
-      'https://ogs.google.com/u/0/widget/app',
-    )).toBe('https://messages.google.com/web/');
-    expect(integrationNavigationResumeUrl(
-      'main-frame',
-      'https://messages.google.com/web/',
-      'https://www.android.com/google-messages/',
-    )).toBe('https://www.android.com/google-messages/');
   });
 
   it('restores manually configured web pages and their visible profiles', () => {
